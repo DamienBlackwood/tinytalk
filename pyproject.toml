@@ -1,0 +1,22 @@
+[project]
+name = "tinytalk"
+version = "0.1.0"
+description = "Push-to-talk terminal transcription, powered by MLX Whisper."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "sounddevice",
+    "scipy",
+    "mlx-whisper",
+]
+
+[project.scripts]
+tinytalk = "tinytalk:main_wrapper"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tinytalk*"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
