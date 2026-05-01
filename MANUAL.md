@@ -1,7 +1,7 @@
 # CONTROLS
 
 `space`
-:   Start capturing audio input. Double tap `space` to stop capturing audio input and start transcription process.
+:   Start recording. Press again to stop and begin transcription.
 
 `esc`
 :   CANCEL operation at any time including while recording, transcribing, or after results have been produced.
@@ -59,7 +59,7 @@ Now you can execute `tinytalk` from any directory.
 **Manual (venv):**
 
 ```bash
-python -m venv venv &amp;amp;&amp;amp; source venv/bin/activate
+python -m venv venv && source venv/bin/activate
 pip install -e .
 tinytalk
 ```
