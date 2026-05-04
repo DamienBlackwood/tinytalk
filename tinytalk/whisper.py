@@ -24,11 +24,15 @@ def transcribe(audio: np.ndarray, model: str, sample_rate: int) -> str:
         raise RuntimeError(f"model not installed — run: huggingface-cli download {model}")
 
     sink = io.StringIO()
-    with redirect_stdout(sink), redirect_stderr(sink):
-        result = mlx_whisper.transcribe(
-            audio.astype(np.float32),
-            path_or_hf_repo=path,
-            verbose=False,
-        )
+    try:
+        with redirect_stdout(sink), redirect_stderr(sink):
+            result = mlx_whisper.transcribe(
+                audio.astype(np.float32),
+                path_or_hf_repo=path,
+                verbose=False,
+            )
+    except Exception as e:
+        detail = sink.getvalue().strip()
+        raise RuntimeError(f"{e}" + (f"\n{detail}" if detail else "")) from e
 
     return result.get("text", "").strip()

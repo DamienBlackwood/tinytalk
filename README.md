@@ -44,7 +44,7 @@ And the solution was one line: set the `TERM` variable to `xterm-256color` befor
 
 ## Methodology
 
-All code written by me, drawing from existing research but implemented independently. No AI was used.
+All code written by me, with minor assistance from AI. But mostly drawn from existing research and implemented independently.
 
 ## License
 

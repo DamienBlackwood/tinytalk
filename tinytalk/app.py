@@ -35,7 +35,7 @@ def _probe_model_status(model_id: str):
 def _load_cfg():
     try:
         return json.loads(_CFG_PATH.read_text())
-    except:
+    except (OSError, json.JSONDecodeError, ValueError):
         return {}
 
 def _save_cfg(data):
@@ -44,6 +44,9 @@ def _save_cfg(data):
         _CFG_PATH.write_text(json.dumps(data, indent=2))
     except OSError:
         pass
+
+def _save_state(app):
+    _save_cfg({"show_dev": app.show_dev, "model_idx": app.model_idx, "auto_copy": app.auto_copy})
 
 N_BARS = 180
 PEAK_DECAY = 0.012
@@ -164,17 +167,17 @@ class App:
             self.scr.clear()
         elif key in (ord('h'), ord('H')):
             self.show_dev = not self.show_dev
-            _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
+            _save_state(self)
             self.scr.clear()
         elif key == ord('m'):
             if self.state in ("idle", "done"):
                 self.model_idx = (self.model_idx + 1) % len(MODELS)
-                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
+                _save_state(self)
                 self._probe_current_model()
         elif key == ord('M'):
             if self.state in ("idle", "done"):
                 self.model_idx = (self.model_idx - 1) % len(MODELS)
-                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
+                _save_state(self)
                 self._probe_current_model()
         elif key in (ord('c'), ord('C')):
             if self.state == "done" and self.transcript:
@@ -182,7 +185,7 @@ class App:
         elif key in (ord('a'), ord('A')):
             if self.state in ("idle", "done"):
                 self.auto_copy = not self.auto_copy
-                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
+                _save_state(self)
         elif key == curses.KEY_UP:
             if self.state == "done" and self._history:
                 if self._hist_idx == -1:
