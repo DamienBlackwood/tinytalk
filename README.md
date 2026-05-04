@@ -17,9 +17,7 @@ Full documentation is found within `MANUAL.md`.
 Python 3.11+ and Apple Silicon required.
 
 ```bash
-git clone https://github.com/DamienBlackwood/tinytalk.git
-cd tinytalk
-pipx install .
+pipx install https://github.com/DamienBlackwood/tinytalk/releases/download/v0.2.0/tinytalk-0.2.0-py3-none-any.whl
 ```
 
 Now run `tinytalk` from any directory!
@@ -44,7 +42,7 @@ And the solution was one line: set the `TERM` variable to `xterm-256color` befor
 
 ## Methodology
 
-All code written by me, with minor assistance from AI. But mostly drawn from existing research and implemented independently.
+All code written and thought out by me, with only **minor** assistance from AI. But mostly drawn from existing research/examples and implemented independently.
 
 ## License
 
