@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 USE_ASCII = False
@@ -56,7 +57,10 @@ def wrap(text, width):
         else:
             if cur:
                 lines.append(cur)
-            cur = word[:width]
+            while len(word) > width:
+                lines.append(word[:width])
+                word = word[width:]
+            cur = word
     if cur:
         lines.append(cur)
     return lines
@@ -71,19 +75,16 @@ def chassis(y, x, w, h, label_left, label_right, theme, rail_attr=None):
     g    = _g()
     ra   = rail_attr if rail_attr is not None else theme.rail
 
-    # corners — one char each
     runs.append((y,         x,         g["TL"], ra))
     runs.append((y,         x + w - 1, g["TR"], ra))
     runs.append((y + h - 1, x,         g["BL"], ra))
     runs.append((y + h - 1, x + w - 1, g["BR"], ra))
 
-    # left label — starts at col x+2, one dash gap after corner
     ltab       = f" {label_left} " if label_left else ""
     after_left = x + 1 + len(ltab)
     if ltab:
         runs.append((y, x + 2, ltab, theme.label))
 
-    # right label — ends one dash before right corner
     rtab         = f" {label_right} " if label_right else ""
     before_right = x + w - 1
     if rtab:
@@ -92,13 +93,11 @@ def chassis(y, x, w, h, label_left, label_right, theme, rail_attr=None):
             runs.append((y, rx, rtab, theme.on))
             before_right = rx
 
-    # top rail
     runs.append((y, x + 1, g["H"], ra))
     mid = before_right - after_left
     if mid > 0:
         runs.append((y, after_left, g["H"] * mid, ra))
 
-    # bottom rail + sides
     runs.append((y + h - 1, x + 1, g["H"] * (w - 2), ra))
     for row in range(y + 1, y + h - 1):
         runs.append((row, x,         g["V"], ra))
@@ -128,9 +127,9 @@ def waveform_processing(y, x, w, h, theme, tick):
     stride  = BAR_W + GAP
     n_slots = max(1, w // stride)
 
-    PERIOD = 150                       # ~2.5s sweep — slow, deliberate
+    PERIOD = 150
     head   = (tick % PERIOD) / PERIOD * n_slots
-    SIGMA  = max(2.0, n_slots / 7.0)  # wider bell, softer edges
+    SIGMA  = max(2.0, n_slots / 7.0)
 
     levels = np.zeros(n_slots, dtype=np.float32)
     for i in range(n_slots):
@@ -280,12 +279,11 @@ def _chip_text(state, spin_i):
         return g["DONE"]
     return g["IDLE"]
 
-
-import math as _math
-
-
+# I have plans to change this soon.
 def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
-            show_dev, dev_log, version, model, wave_ceil, done_tick, theme):
+            show_dev, dev_log, version, model, wave_ceil, done_tick, theme,
+            clipboard_tick=0, auto_copy=False, hist_idx=-1, hist_len=0,
+            proc_tick=0, model_was_cold=False):
     runs = []
     g = _g()
 
@@ -293,19 +291,17 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
     box_x = PAD
     box_y = 1
     box_w = max(60, w - PAD * 2 - 1)
-    box_h = max(6, h - box_y - 1)  # fills to bottom, one row margin
+    box_h = max(6, h - box_y - 1)
     ix    = box_x + 2
     iw    = box_w - 4
 
-    breathe   = 0.5 + 0.5 * _math.sin(tick / 55.0)
+    breathe   = 0.5 + 0.5 * math.sin(tick / 55.0)
     rail_attr = theme.glass if state == "idle" and breathe < 0.4 else theme.rail
 
-    # chassis_runs collected separately — painted LAST so pipes are never overwritten
     chassis_runs = chassis(box_y, box_x, box_w, box_h, "TINYTALK", model, theme, rail_attr)
 
     cur_y = box_y + 2
 
-    # wordmark — dims slightly while processing, full bright otherwise
     mark      = "T I N Y T A L K"
     mark_attr = theme.mid if state == "processing" else theme.text
     runs.append((cur_y, box_x + _cx(box_w, mark), mark, mark_attr))
@@ -315,15 +311,12 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
     runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.label))
     cur_y += 2
 
-    # ── chip: REC breathes between rec/mid while listening ────────────────────
     chip = _chip_text(state, spin_i)
     if state in ("listening", "draining"):
-        # pulse: bright on beat (~1Hz), dim between
         chip_col = theme.rec if (tick % 50) < 35 else theme.mid
     elif state == "processing":
         chip_col = theme.proc
     elif state == "done":
-        # fade in over 20 frames
         chip_col = theme.done if done_tick > 20 else (theme.mid if done_tick > 8 else theme.soft)
     else:
         chip_col = theme.label
@@ -333,7 +326,6 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
     runs.append((cur_y, ix + iw - len("SR 16K"),  "SR 16K",               theme.label))
     cur_y += 2
 
-    # ── waveform ──────────────────────────────────────────────────────────────
     WH     = 7
     wave_w = min(iw - 2, 140)
     wave_x = box_x + _cx(box_w, " " * wave_w)
@@ -350,7 +342,6 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
 
     cur_y += WH + 2
 
-    # ── transcript / hint ─────────────────────────────────────────────────────
     tx_w = min(72, iw - 2)
     tx_x = box_x + _cx(box_w, " " * tx_w)
 
@@ -359,12 +350,14 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         tag_attr = (theme.err  if err else
                     theme.label if done_tick > 12 else theme.soft)
         runs.append((cur_y, box_x + _cx(box_w, tag), tag, tag_attr))
+        if hist_idx >= 0 and hist_len > 0:
+            badge = f"{hist_idx + 1}/{hist_len}"
+            runs.append((cur_y, tx_x + tx_w - len(badge), badge, theme.soft))
         cur_y += 1
 
     if err and state == "done":
         runs.append((cur_y, tx_x, ("! " + err)[:tx_w], theme.err))
     elif transcript and state == "done":
-        # text fades in: soft → mid → text over first 30 frames
         txt_attr = (theme.text if done_tick > 30 else
                     theme.mid  if done_tick > 15 else theme.soft)
         lines     = wrap(transcript[:type_pos], tx_w)
@@ -377,7 +370,6 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
                 runs.append((cur_y + min(len(lines), max_lines) - 1,
                               tx_x + len(last), "|", theme.on))
     elif state == "idle":
-        # hint breathes in sync with the chassis
         hint_attr = theme.soft if breathe < 0.4 else theme.label
         runs.append((cur_y, box_x + _cx(box_w, "press SPACE to speak"),
                      "press SPACE to speak", hint_attr))
@@ -385,12 +377,17 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         runs.append((cur_y, box_x + _cx(box_w, "SPACE to stop"),
                      "SPACE to stop", theme.label))
     elif state == "processing":
-        # "transcribing" text pulses gently
         proc_attr = theme.proc if (tick % 40) < 28 else theme.proc_soft
-        runs.append((cur_y, box_x + _cx(box_w, "transcribing"),
-                     "transcribing", proc_attr))
+        if model_was_cold and proc_tick < 180:
+            label = "loading model"
+        else:
+            label = "transcribing"
+        runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
 
-    # stats line below transcript
+    if state == "done" and clipboard_tick > 0:
+        cb_attr = theme.done if clipboard_tick > 22 else theme.mid
+        runs.append((cur_y + 1, box_x + _cx(box_w, "copied"), "copied", cb_attr))
+
     if state == "done" and dev_log:
         stat      = dev_log[-1]
         stat_attr = theme.dim if done_tick > 40 else theme.soft
@@ -405,9 +402,10 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
 
     foot_y = box_y + box_h - 2
     if foot_y > cur_y + 2:
+        auto_tag = "autocopy on" if auto_copy else "autocopy off"
         kmap = {
-            "idle":       [("SPC", "record"), ("M", "model"), ("H", "dev"), ("Q", "quit")],
-            "done":       [("SPC", "again"),  ("ESC", "clear"), ("M", "model"), ("Q", "quit")],
+            "idle":       [("SPC", "record"), ("M", "model"), ("A", auto_tag), ("H", "dev"), ("Q", "quit")],
+            "done":       [("SPC", "again"), ("C", "copy"), ("A", auto_tag), ("↑↓", "hist"), ("ESC", "clear"), ("Q", "quit")],
             "listening":  [("SPC", "stop"),   ("ESC", "cancel"), ("Q", "quit")],
             "processing": [("SPC", "cancel"), ("ESC", "cancel")],
         }
@@ -416,6 +414,5 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         foot_attr = theme.dim if state != "idle" else (theme.soft if breathe < 0.4 else theme.dim)
         runs.append((foot_y, box_x + _cx(box_w, sep.join(parts)), sep.join(parts), foot_attr))
 
-    # paint chassis on top — pipes can never be overwritten by content
     runs.extend(chassis_runs)
     return runs

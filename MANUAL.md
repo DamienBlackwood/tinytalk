@@ -4,16 +4,25 @@
 :   Start recording. Press again to stop and begin transcription.
 
 `esc`
-:   CANCEL operation at any time including while recording, transcribing, or after results have been produced.
+:   Halt at any point. Recording, transcribing, or after results appear, when at the done state, clears the transcript.
+
+`c`
+:   Copy transcript to clipboard (only when done).
+
+`a`
+:   Toggle autocopy so that every result is copied automatically.
+
+`↑` / `↓`
+:   Go through the last 5 transcripts (when done).
 
 `m`
-:   Cycle through models to the next one.
+:   Cycle through models forward.
 
 `M`
 :   Cycle through models backwards.
 
 `h`
-:   Toggle showing/hiding development statistics panel.
+:   Toggle the dev stats panel.
 
 `q`
 :   Quit.
@@ -75,6 +84,7 @@ Supported keys:
 {
   "model_idx": 4,
   "show_dev": false,
+  "auto_copy": false,
   "ascii": false
 }
 ```

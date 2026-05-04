@@ -26,9 +26,9 @@ Now run `tinytalk` from any directory!
 
 ## Rationale
 
-I wanted something quick and keyboard driven to make audio transcription without going through any cloud providers. On Apple Silicon, the Whisper model runs fast enough to perform transcription in "realtime" (after the initial load & compile) without uploading audio anywhere.It uses raw curses same way my other project, [kmatrix](https://github.com/DamienBlackwood/kmatrix), does.
+I wanted something quick and keyboard driven to make audio transcription without going through any cloud providers. On Apple Silicon, the Whisper model runs fast enough to perform transcription in "realtime" (after the initial load & compile) without uploading audio anywhere. It uses raw curses the same way my other project, [kmatrix](https://github.com/DamienBlackwood/kmatrix), does.
 
-For now, this was mostly just a means of honing my implementation of curses and because the application is *relatively* simple (compared to my other projects). Stuff like transcriptions showing work well, and the UI is polished enough for my standards, but it doesn't really do anything with the output aside from displaying it, I'll probably add clipboard copying or piping it to another command/application soon.
+For now, this was mostly just a means of honing my implementation of curses and because the application is *relatively* simple (compared to my other projects). Stuff like transcriptions showing work well, and the UI is polished enough for my standards, but it doesn't really do anything with the output aside from displaying it, I'll probably add ~~clipboard copying~~ and/or piping it to another command/application soon.
 
 ## Under the hood (reflections for me)
 

@@ -1,6 +1,7 @@
 import sys
-import os
+import io
 import numpy as np
+from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
 _HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
@@ -22,17 +23,12 @@ def transcribe(audio: np.ndarray, model: str, sample_rate: int) -> str:
     if path is None:
         raise RuntimeError(f"model not installed — run: huggingface-cli download {model}")
 
-    devnull  = open(os.devnull, "w")
-    old_out, old_err = sys.stdout, sys.stderr
-    sys.stdout = sys.stderr = devnull
-    try:
+    sink = io.StringIO()
+    with redirect_stdout(sink), redirect_stderr(sink):
         result = mlx_whisper.transcribe(
             audio.astype(np.float32),
             path_or_hf_repo=path,
             verbose=False,
         )
-    finally:
-        sys.stdout, sys.stderr = old_out, old_err
-        devnull.close()
 
     return result.get("text", "").strip()

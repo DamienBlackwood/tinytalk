@@ -1,10 +1,10 @@
-import curses, json, threading, time, collections, numpy as np
+import curses, json, threading, time, collections, subprocess, numpy as np
 from pathlib import Path
 from . import render
 from .audio import AudioCapture, SAMPLE_RATE
 from .whisper import transcribe, _HF_CACHE
 
-VERSION  = "v0.1"
+VERSION  = "v0.2"
 FRAME_DT = 1 / 60
 TYPE_DT  = 0.016
 
@@ -42,7 +42,7 @@ def _save_cfg(data):
     try:
         _CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
         _CFG_PATH.write_text(json.dumps(data, indent=2))
-    except:
+    except OSError:
         pass
 
 N_BARS = 180
@@ -120,6 +120,7 @@ class App:
         if not (0 <= self.model_idx < len(MODELS)):
             self.model_idx = DEFAULT_MODEL_IDX
         self.show_dev = cfg.get("show_dev", False)
+        self.auto_copy = cfg.get("auto_copy", False)
         self._hist = np.zeros(N_BARS, dtype=np.float32)
         self._peak = np.zeros(N_BARS, dtype=np.float32)
         self._smoothed = 0.0
@@ -131,6 +132,12 @@ class App:
         self._captured = None
         self._drain_tick = 0
         self._done_tick  = 0
+        self._clipboard_tick = 0
+        self._history = collections.deque(maxlen=5)
+        self._hist_idx = -1
+        self._hist_current = ""
+        self._proc_tick = 0
+        self._model_was_cold = False
 
         mid = MODELS[self.model_idx][0]
         if mid not in _model_status:
@@ -147,6 +154,7 @@ class App:
                 return True
             if self.state == "done":
                 self.transcript = ""; self.err = ""; self.type_pos = 0
+                self._hist_idx = -1
                 self.state = "idle"; self.scr.clear()
             elif self.state == "listening":
                 self.audio.disarm(); self.state = "idle"
@@ -156,18 +164,39 @@ class App:
             self.scr.clear()
         elif key in (ord('h'), ord('H')):
             self.show_dev = not self.show_dev
-            _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx})
+            _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
             self.scr.clear()
         elif key == ord('m'):
             if self.state in ("idle", "done"):
                 self.model_idx = (self.model_idx + 1) % len(MODELS)
-                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx})
+                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
                 self._probe_current_model()
         elif key == ord('M'):
             if self.state in ("idle", "done"):
                 self.model_idx = (self.model_idx - 1) % len(MODELS)
-                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx})
+                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
                 self._probe_current_model()
+        elif key in (ord('c'), ord('C')):
+            if self.state == "done" and self.transcript:
+                self._do_copy()
+        elif key in (ord('a'), ord('A')):
+            if self.state in ("idle", "done"):
+                self.auto_copy = not self.auto_copy
+                _save_cfg({"show_dev": self.show_dev, "model_idx": self.model_idx, "auto_copy": self.auto_copy})
+        elif key == curses.KEY_UP:
+            if self.state == "done" and self._history:
+                if self._hist_idx == -1:
+                    self._hist_current = self.transcript
+                next_idx = self._hist_idx + 1
+                if next_idx < len(self._history):
+                    self._hist_idx = next_idx
+                    self.transcript = self._history[self._hist_idx]
+                    self.type_pos = len(self.transcript)
+        elif key == curses.KEY_DOWN:
+            if self.state == "done" and self._hist_idx >= 0:
+                self._hist_idx -= 1
+                self.transcript = self._hist_current if self._hist_idx == -1 else self._history[self._hist_idx]
+                self.type_pos = len(self.transcript)
         elif key == ord(' '):
             if self.state == "processing":
                 self._cancel_evt.set(); self.state = "idle"; self.scr.clear()
@@ -181,10 +210,18 @@ class App:
             _model_status[mid] = "?"
             threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
 
+    def _do_copy(self):
+        try:
+            subprocess.run(["pbcopy"], input=self.transcript.encode(), check=False)
+            self._clipboard_tick = 45
+        except OSError:
+            pass
+
     def _toggle(self):
         if self.state in ("idle", "done"):
             self.state = "listening"
             self.transcript = ""; self.err = ""; self.type_pos = 0
+            self._hist_idx = -1
             self._peak[:] = 0.0; self._hist[:] = 0.0; self._smoothed = 0.0
             self._wave_ceil = render.WAVE_CEIL * 0.24
             self.audio.arm()
@@ -200,9 +237,14 @@ class App:
         try:
             text = transcribe(audio, model_id, SAMPLE_RATE)
             self._result = text
-            _model_status[model_id] = "●"  # dictates if it's loaded / in memory
-            secs = len(audio) / SAMPLE_RATE
-            self.dev_log.append(f"{secs:.1f}s audio -> {time.perf_counter() - t0:.1f}s")
+            _model_status[model_id] = "●"
+            secs    = len(audio) / SAMPLE_RATE
+            elapsed = time.perf_counter() - t0
+            words   = len(text.split()) if text.strip() else 0
+            ratio   = secs / elapsed if elapsed > 0 else 0
+            label   = MODELS[self.model_idx][1]
+            self.dev_log.append(f"{secs:.1f}s → {elapsed:.1f}s  ({ratio:.1f}× realtime)")
+            self.dev_log.append(f"{words} words  ·  {label}")
         except Exception as e:
             self._result = e
             self.dev_log.append(f"err: {e}")
@@ -226,30 +268,42 @@ class App:
             self.type_pos    = 0
             self.type_start  = time.perf_counter()
             self._done_tick  = 0
+            self._hist_idx   = -1
+            if self.transcript.strip():
+                self._history.appendleft(self.transcript)
+            if self.auto_copy and self.transcript:
+                self._do_copy()
 
         if self.state == "done":
             self._done_tick += 1
+            if self._clipboard_tick > 0:
+                self._clipboard_tick -= 1
             if self.type_pos < len(self.transcript):
                 self.type_pos = min(len(self.transcript), int((time.perf_counter() - self.type_start) / TYPE_DT))
 
         if self.state in ("processing", "draining"):
             self.spin_i += 1
+        if self.state == "processing":
+            self._proc_tick += 1
 
         if self.state == "draining":
-            n = len(self._hist)
-            t = min(1.0, self._drain_tick / 72.0)   # 72 frames is roughly 1.2s
+            if self._hist.max() >= 0.001:
+                n = len(self._hist)
+                t = min(1.0, self._drain_tick / 72.0)
+                envelope = np.linspace(1.0 - t * 0.96, 1.0 - t * 0.30, n, dtype=np.float32)
+                self._hist *= np.clip(envelope, 0.0, 1.0)
             self._drain_tick += 1
-            # exponential envelope: left side decays fast and the right side lingers
-            envelope = np.linspace(1.0 - t * 0.96, 1.0 - t * 0.30, n, dtype=np.float32)
-            self._hist *= np.clip(envelope, 0.0, 1.0)
             if self._hist.max() < 0.001:
                 self._hist[:] = 0.0
                 self.state = "processing"
                 self._result_evt.clear()
                 self._result = None
+                self._proc_tick = 0
+                mid = MODELS[self.model_idx][0]
+                self._model_was_cold = _model_status.get(mid) != "●"
                 threading.Thread(
                     target=self._do_transcribe,
-                    args=(self._captured, MODELS[self.model_idx][0]),
+                    args=(self._captured, mid),
                     daemon=True,
                 ).start()
 
@@ -292,6 +346,9 @@ class App:
             f"{MODELS[self.model_idx][1]} {_model_status.get(MODELS[self.model_idx][0], '?')}",
             self._wave_ceil, self._done_tick,
             self.theme,
+            self._clipboard_tick, self.auto_copy,
+            self._hist_idx, len(self._history),
+            self._proc_tick, self._model_was_cold,
         ):
             try:
                 self.scr.addstr(y, x, text, attr)
@@ -328,11 +385,9 @@ def main():
     except locale.Error:
         pass
 
-    # xterm-ghostty terminfo marks box-drawing chars as 2-wide, which breaks the curses layout
     if os.environ.get("TERM") == "xterm-ghostty":
         os.environ["TERM"] = "xterm-256color"
 
-    # honour the explicit config override first, then probe at runtime
     cfg = _load_cfg()
     if "ascii" in cfg:
         render.USE_ASCII = bool(cfg["ascii"])

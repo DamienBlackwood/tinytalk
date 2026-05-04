@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.0
+
+- Clipboard: `c` copies transcript. `a` toggles autocopy (both are persistent)
+- History: `↑` / `↓` in done state steps through last 5 transcripts.
+- Dev log now shows timing, realtime ratio, word count, and model used per transcription.
+- Cold model load shows "loading model" instead of "transcribing" on first use (I plan to make it more robust later).
+- Fixed: bare `except` in `_save_cfg` narrowed to `OSError`.
+- Fixed: long sentences in transcript now wrap properly instead of truncating.
+- Mic stream closes immediately after recording stops.
+
 ## v0.1.0
 
 Initial release.

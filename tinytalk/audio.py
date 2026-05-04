@@ -5,8 +5,7 @@ import sounddevice as sd
 
 SAMPLE_RATE  = 16000
 CHUNK        = 512
-# keep ~2.5s of recent chunks — enough for 120 bars at any terminal width
-RING_CHUNKS  = 80
+RING_CHUNKS  = 80  # ~2.5s at 16kHz/512
 
 
 class AudioCapture:
@@ -23,7 +22,6 @@ class AudioCapture:
         with self._lock:
             self._chunks.clear()
             self._ring.clear()
-        self._recording = True
         if self._stream is None:
             self._stream = sd.InputStream(
                 samplerate=self.sample_rate,
@@ -33,6 +31,7 @@ class AudioCapture:
                 callback=self._cb,
             )
             self._stream.start()
+        self._recording = True
 
     def disarm(self):
         self._recording = False
@@ -61,19 +60,11 @@ class AudioCapture:
             self._ring.append(chunk)
 
     def current_rms(self) -> float:
-        """
-        RMS of the most recent ~1 frame of audio (~16ms at 60fps). The app
-        feeds this into a scrolling history so each frame produces exactly
-        one new bar and no re-pooling, no jitter.
-        """
-        # ~16ms at 16kHz = 256 samples. Round up to chunk boundary.
         target = max(self.chunk, self.sample_rate // 60)
         with self._lock:
             if not self._ring:
                 return 0.0
-            # walk newest-first until we have enough
-            buf = []
-            total = 0
+            buf, total = [], 0
             for chunk in reversed(self._ring):
                 buf.append(chunk)
                 total += len(chunk)
