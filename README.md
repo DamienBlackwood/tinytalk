@@ -1,10 +1,10 @@
 # tinytalk
 
-Push-to-talk terminal transcription application using local-on-device Whisper through MLX.
+Push-to-talk terminal transcription using local on-device Whisper. macOS uses MLX, Windows and Linux use faster-whisper with automatic GPU acceleration (CUDA) and CPU fallback. No data leaves your device.
 
-Press space to toggle recording: first press starts, second press stops and triggers transcription. No data leaves your device.
+Press space to start recording, press again to stop and transcribe.
 
-Full documentation is found within `MANUAL.md`.
+Full documentation is in `MANUAL.md`.
 
 ## How does it look?
 
@@ -14,13 +14,23 @@ Full documentation is found within `MANUAL.md`.
 
 ## Quick start
 
-Python 3.11+ and Apple Silicon required.
+Python 3.11+ required.
 
+**macOS (Apple Silicon):**
 ```bash
-pipx install https://github.com/DamienBlackwood/tinytalk/releases/download/v0.2.0/tinytalk-0.2.0-py3-none-any.whl
+git clone https://github.com/DamienBlackwood/tinytalk.git && cd tinytalk
+./install.sh
+.venv/bin/python tinytalk.py
 ```
 
-Now run `tinytalk` from any directory!
+**Windows:**
+```powershell
+git clone https://github.com/DamienBlackwood/tinytalk.git; cd tinytalk
+.\install.ps1
+& .\.venv\Scripts\python.exe tinytalk.py
+```
+
+On Windows, models download automatically on first use. On macOS, see `MANUAL.md` for model setup. (I'll get to automating it soon, kinda a WIP)
 
 ## Rationale
 

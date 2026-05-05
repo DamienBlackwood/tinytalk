@@ -1,36 +1,37 @@
-import curses, json, threading, time, collections, subprocess, numpy as np
+import curses, json, threading, time, collections, subprocess, sys, numpy as np
 from pathlib import Path
 from . import render
 from .audio import AudioCapture, SAMPLE_RATE
-from .whisper import transcribe, _HF_CACHE
+from .whisper import transcribe, is_model_cached, set_status_callback
 
 VERSION  = "v0.2"
 FRAME_DT = 1 / 60
 TYPE_DT  = 0.016
 
-MODELS = [
-    ("mlx-community/whisper-tiny",           "TINY"),
-    ("mlx-community/whisper-base",           "BASE"),
-    ("mlx-community/whisper-small",          "SMALL"),
-    ("mlx-community/whisper-medium",         "MEDIUM"),
-    ("mlx-community/whisper-large-v3-turbo", "TURBO"),
-]
-DEFAULT_MODEL_IDX = 4  # set this to whatever you'd like!
+if sys.platform == "darwin":
+    MODELS = [
+        ("mlx-community/whisper-tiny",           "TINY"),
+        ("mlx-community/whisper-base",           "BASE"),
+        ("mlx-community/whisper-small",          "SMALL"),
+        ("mlx-community/whisper-medium",         "MEDIUM"),
+        ("mlx-community/whisper-large-v3-turbo", "TURBO"),
+    ]
+else:
+    MODELS = [
+        ("Systran/faster-whisper-tiny",     "TINY"),
+        ("Systran/faster-whisper-base",     "BASE"),
+        ("Systran/faster-whisper-small",    "SMALL"),
+        ("Systran/faster-whisper-medium",   "MEDIUM"),
+        ("Systran/faster-whisper-large-v3", "LARGE"),
+    ]
+DEFAULT_MODEL_IDX = 0 if sys.platform != "darwin" else 4
 
 _model_status: dict[str, str] = {}
 _CFG_PATH = Path(__file__).parent.parent / ".tinytalk" / "config.json"
 
 
-def _check_model_cached(model_id: str) -> str:
-    folder    = _HF_CACHE / ("models--" + model_id.replace("/", "--"))
-    snapshots = folder / "snapshots"
-    if snapshots.exists() and any(snapshots.iterdir()):
-        return "↓"
-    return "✗"
-
-
 def _probe_model_status(model_id: str):
-    _model_status[model_id] = _check_model_cached(model_id)
+    _model_status[model_id] = "↓" if is_model_cached(model_id) else "✗"
 
 def _load_cfg():
     try:
@@ -46,7 +47,12 @@ def _save_cfg(data):
         pass
 
 def _save_state(app):
-    _save_cfg({"show_dev": app.show_dev, "model_idx": app.model_idx, "auto_copy": app.auto_copy})
+    _save_cfg({
+        "show_dev":   app.show_dev,
+        "model_idx":  app.model_idx,
+        "auto_copy":  app.auto_copy,
+        "typewriter": app.typewriter,
+    })
 
 N_BARS = 180
 PEAK_DECAY = 0.012
@@ -55,6 +61,7 @@ ATTACK  = 0.55
 RELEASE = 0.14
 GAIN_ATTACK  = 0.05
 GAIN_RELEASE = 0.008
+
 
 def _build_theme():
     rich = curses.COLORS >= 256
@@ -91,19 +98,19 @@ def _build_theme():
         except curses.error:
             curses.init_pair(idx, fg, curses.COLOR_BLACK)
     t = render.Theme()
-    t.dim = curses.color_pair(1)
-    t.rail = curses.color_pair(2)
-    t.text = curses.color_pair(3) | curses.A_BOLD
-    t.label = curses.color_pair(4)
-    t.on = curses.color_pair(5) | curses.A_BOLD
-    t.mid = curses.color_pair(6)
-    t.soft = curses.color_pair(12)
-    t.glass = curses.color_pair(7)
-    t.proc = curses.color_pair(8) | curses.A_BOLD
+    t.dim       = curses.color_pair(1)
+    t.rail      = curses.color_pair(2)
+    t.text      = curses.color_pair(3) | curses.A_BOLD
+    t.label     = curses.color_pair(4)
+    t.on        = curses.color_pair(5) | curses.A_BOLD
+    t.mid       = curses.color_pair(6)
+    t.soft      = curses.color_pair(12)
+    t.glass     = curses.color_pair(7)
+    t.proc      = curses.color_pair(8) | curses.A_BOLD
     t.proc_soft = curses.color_pair(13)
-    t.rec = curses.color_pair(9) | curses.A_BOLD
-    t.done = curses.color_pair(10) | curses.A_BOLD
-    t.err = curses.color_pair(11)
+    t.rec       = curses.color_pair(9) | curses.A_BOLD
+    t.done      = curses.color_pair(10) | curses.A_BOLD
+    t.err       = curses.color_pair(11)
     return t
 
 
@@ -119,11 +126,12 @@ class App:
         self.spin_i = 0
         self.tick = 0
         cfg = _load_cfg()
-        self.model_idx = cfg.get("model_idx", DEFAULT_MODEL_IDX)
+        self.model_idx  = cfg.get("model_idx", DEFAULT_MODEL_IDX)
         if not (0 <= self.model_idx < len(MODELS)):
             self.model_idx = DEFAULT_MODEL_IDX
-        self.show_dev = cfg.get("show_dev", False)
-        self.auto_copy = cfg.get("auto_copy", False)
+        self.show_dev  = cfg.get("show_dev",   False)
+        self.auto_copy = cfg.get("auto_copy",  False)
+        self.typewriter = cfg.get("typewriter", True)
         self._hist = np.zeros(N_BARS, dtype=np.float32)
         self._peak = np.zeros(N_BARS, dtype=np.float32)
         self._smoothed = 0.0
@@ -141,6 +149,14 @@ class App:
         self._hist_current = ""
         self._proc_tick = 0
         self._model_was_cold = False
+        self._model_loaded = False
+        self._transcribe_device = None
+        self._scroll_offset = 0
+        self._last_word_count = 0
+        self._last_audio_secs = 0.0
+
+        self._in_settings = False
+        self._settings_row = 0
 
         mid = MODELS[self.model_idx][0]
         if mid not in _model_status:
@@ -149,6 +165,9 @@ class App:
         self.theme = None
 
     def handle_key(self, key):
+        if self._in_settings:
+            return self._handle_settings_key(key)
+
         if key in (ord('q'), ord('Q')):
             return False
         if key == 27:
@@ -157,36 +176,45 @@ class App:
                 return True
             if self.state == "done":
                 self.transcript = ""; self.err = ""; self.type_pos = 0
-                self._hist_idx = -1
+                self._hist_idx = -1; self._scroll_offset = 0
                 self.state = "idle"; self.scr.clear()
             elif self.state == "listening":
                 self.audio.disarm(); self.state = "idle"
                 self._hist[:] = 0.0; self._peak[:] = 0.0; self.scr.clear()
             return True
+        if key == curses.KEY_MOUSE:
+            try:
+                _, _mx, _my, _mz, bstate = curses.getmouse()
+                if bstate & curses.BUTTON4_PRESSED:   # scroll up 
+                    if self.state == "done":
+                        self._scroll_offset = max(0, self._scroll_offset - 1)
+                elif bstate & curses.BUTTON5_PRESSED:  # scroll down
+                    if self.state == "done":
+                        self._scroll_offset += 1
+            except curses.error:
+                pass
+            return True
         if key == curses.KEY_RESIZE:
+            self._scroll_offset = 0
+            self.scr.clear()
+        elif key in (ord('s'), ord('S')):
+            self._in_settings = True
+            self._settings_row = 0
             self.scr.clear()
         elif key in (ord('h'), ord('H')):
             self.show_dev = not self.show_dev
             _save_state(self)
             self.scr.clear()
-        elif key == ord('m'):
-            if self.state in ("idle", "done"):
-                self.model_idx = (self.model_idx + 1) % len(MODELS)
-                _save_state(self)
-                self._probe_current_model()
-        elif key == ord('M'):
-            if self.state in ("idle", "done"):
-                self.model_idx = (self.model_idx - 1) % len(MODELS)
-                _save_state(self)
-                self._probe_current_model()
         elif key in (ord('c'), ord('C')):
             if self.state == "done" and self.transcript:
                 self._do_copy()
-        elif key in (ord('a'), ord('A')):
-            if self.state in ("idle", "done"):
-                self.auto_copy = not self.auto_copy
-                _save_state(self)
         elif key == curses.KEY_UP:
+            if self.state == "done":
+                self._scroll_offset = max(0, self._scroll_offset - 1)
+        elif key == curses.KEY_DOWN:
+            if self.state == "done":
+                self._scroll_offset += 1
+        elif key == ord('['):
             if self.state == "done" and self._history:
                 if self._hist_idx == -1:
                     self._hist_current = self.transcript
@@ -195,17 +223,92 @@ class App:
                     self._hist_idx = next_idx
                     self.transcript = self._history[self._hist_idx]
                     self.type_pos = len(self.transcript)
-        elif key == curses.KEY_DOWN:
+                    self._scroll_offset = 0
+        elif key == ord(']'):
             if self.state == "done" and self._hist_idx >= 0:
                 self._hist_idx -= 1
                 self.transcript = self._hist_current if self._hist_idx == -1 else self._history[self._hist_idx]
                 self.type_pos = len(self.transcript)
+                self._scroll_offset = 0
         elif key == ord(' '):
             if self.state == "processing":
                 self._cancel_evt.set(); self.state = "idle"; self.scr.clear()
                 return True
             self._toggle()
         return True
+
+    def _handle_settings_key(self, key):
+        settings = self._settings_items()
+        if key == curses.KEY_MOUSE:
+            try:
+                _, _mx, _my, _mz, bstate = curses.getmouse()
+                if bstate & curses.BUTTON4_PRESSED:
+                    self._settings_row = max(0, self._settings_row - 1)
+                elif bstate & curses.BUTTON5_PRESSED:
+                    self._settings_row = min(len(settings) - 1, self._settings_row + 1)
+            except curses.error:
+                pass
+            return True
+        if key in (27, ord('s'), ord('S')):
+            self._in_settings = False
+            self.scr.clear()
+        elif key == curses.KEY_UP:
+            self._settings_row = max(0, self._settings_row - 1)
+        elif key == curses.KEY_DOWN:
+            self._settings_row = min(len(settings) - 1, self._settings_row + 1)
+        elif key in (ord(' '), ord('\n'), curses.KEY_ENTER, 10, 13):
+            self._settings_activate(self._settings_row)
+        elif key == curses.KEY_LEFT:
+            self._settings_adjust(self._settings_row, -1)
+        elif key == curses.KEY_RIGHT:
+            self._settings_adjust(self._settings_row, +1)
+        elif key in (ord('q'), ord('Q')):
+            return False
+        return True
+
+    def _settings_items(self):
+        return [
+            ("Model",       "cycle",  lambda: MODELS[self.model_idx][1],
+                            [m[1] for m in MODELS]),
+            ("Auto-copy",   "toggle", lambda: self.auto_copy,   None),
+            ("Typewriter",  "toggle", lambda: self.typewriter,  None),
+            ("Dev panel",   "toggle", lambda: self.show_dev,    None),
+        ]
+
+    def _settings_activate(self, row):
+        items = self._settings_items()
+        if row >= len(items):
+            return
+        label, kind, getter, options = items[row]
+        if kind == "toggle":
+            self._settings_set_toggle(label)
+        elif kind == "cycle":
+            self._settings_adjust(row, +1)
+
+    def _settings_adjust(self, row, delta):
+        items = self._settings_items()
+        if row >= len(items):
+            return
+        label, kind, getter, options = items[row]
+        if kind == "toggle":
+            self._settings_set_toggle(label)
+        elif kind == "cycle" and options:
+            if label == "Model" and self.state not in ("listening", "processing", "draining"):
+                self.model_idx = (self.model_idx + delta) % len(MODELS)
+                _save_state(self)
+                self._probe_current_model()
+
+    def _settings_set_toggle(self, label):
+        if label == "Auto-copy":
+            self.auto_copy = not self.auto_copy
+        elif label == "Typewriter":
+            self.typewriter = not self.typewriter
+            if not self.typewriter and self.state == "done":
+                self.type_pos = len(self.transcript)
+        elif label == "Dev panel":
+            self.show_dev = not self.show_dev
+            self.scr.clear()
+        _save_state(self)
 
     def _probe_current_model(self):
         mid = MODELS[self.model_idx][0]
@@ -215,7 +318,13 @@ class App:
 
     def _do_copy(self):
         try:
-            subprocess.run(["pbcopy"], input=self.transcript.encode(), check=False)
+            if sys.platform == "darwin":
+                subprocess.run(["pbcopy"], input=self.transcript.encode(), check=False)
+            elif sys.platform == "win32":
+                subprocess.run(["clip"], input=self.transcript.encode(), check=False)
+            else:
+                subprocess.run(["xclip", "-selection", "clipboard"],
+                               input=self.transcript.encode(), check=False)
             self._clipboard_tick = 45
         except OSError:
             pass
@@ -224,29 +333,43 @@ class App:
         if self.state in ("idle", "done"):
             self.state = "listening"
             self.transcript = ""; self.err = ""; self.type_pos = 0
-            self._hist_idx = -1
+            self._hist_idx = -1; self._scroll_offset = 0
             self._peak[:] = 0.0; self._hist[:] = 0.0; self._smoothed = 0.0
             self._wave_ceil = render.WAVE_CEIL * 0.24
             self.audio.arm()
         elif self.state == "listening":
-            self._captured    = self.audio.disarm()
-            self._drain_tick  = 0
-            self.state        = "draining"
+            self._captured   = self.audio.disarm()
+            self._drain_tick = 0
+            self.state       = "draining"
 
     def _do_transcribe(self, audio, model_id):
         if self._cancel_evt.is_set():
             self._cancel_evt.clear(); return
         t0 = time.perf_counter()
+
+        def _on_status(s):
+            if s == "downloading":
+                _model_status[model_id] = "↻"
+            elif s == "loaded":
+                _model_status[model_id] = "●"
+                self._model_loaded = True
+        set_status_callback(_on_status)
+
         try:
-            text = transcribe(audio, model_id, SAMPLE_RATE)
+            text, device = transcribe(audio, model_id, SAMPLE_RATE)
             self._result = text
             _model_status[model_id] = "●"
-            secs    = len(audio) / SAMPLE_RATE
-            elapsed = time.perf_counter() - t0
-            words   = len(text.split()) if text.strip() else 0
-            ratio   = secs / elapsed if elapsed > 0 else 0
-            label   = MODELS[self.model_idx][1]
-            self.dev_log.append(f"{secs:.1f}s → {elapsed:.1f}s  ({ratio:.1f}× realtime)")
+            if device:
+                self._transcribe_device = device
+            total_secs = len(audio) / SAMPLE_RATE
+            elapsed    = time.perf_counter() - t0
+            words      = len(text.split()) if text.strip() else 0
+            ratio      = total_secs / elapsed if elapsed > 0 else 0
+            label      = MODELS[self.model_idx][1]
+
+            self._last_word_count = words
+            self._last_audio_secs = total_secs
+            self.dev_log.append(f"{total_secs:.1f}s audio  →  {elapsed:.1f}s  ({ratio:.1f}×)")
             self.dev_log.append(f"{words} words  ·  {label}")
         except Exception as e:
             self._result = e
@@ -267,11 +390,12 @@ class App:
                 self.err = str(res); self.transcript = ""
             else:
                 self.transcript = res or ""
-            self.state       = "done"
-            self.type_pos    = 0
-            self.type_start  = time.perf_counter()
-            self._done_tick  = 0
-            self._hist_idx   = -1
+            self.state      = "done"
+            self.type_pos   = 0 if self.typewriter else len(self.transcript)
+            self.type_start = time.perf_counter()
+            self._done_tick = 0
+            self._hist_idx  = -1
+            self._scroll_offset = 0
             if self.transcript.strip():
                 self._history.appendleft(self.transcript)
             if self.auto_copy and self.transcript:
@@ -281,8 +405,9 @@ class App:
             self._done_tick += 1
             if self._clipboard_tick > 0:
                 self._clipboard_tick -= 1
-            if self.type_pos < len(self.transcript):
-                self.type_pos = min(len(self.transcript), int((time.perf_counter() - self.type_start) / TYPE_DT))
+            if self.typewriter and self.type_pos < len(self.transcript):
+                self.type_pos = min(len(self.transcript),
+                                    int((time.perf_counter() - self.type_start) / TYPE_DT))
 
         if self.state in ("processing", "draining"):
             self.spin_i += 1
@@ -300,8 +425,10 @@ class App:
                 self._hist[:] = 0.0
                 self.state = "processing"
                 self._result_evt.clear()
+                self._cancel_evt.clear()
                 self._result = None
                 self._proc_tick = 0
+                self._model_loaded = False
                 mid = MODELS[self.model_idx][0]
                 self._model_was_cold = _model_status.get(mid) != "●"
                 threading.Thread(
@@ -327,6 +454,7 @@ class App:
             self._peak[-1] = max(self._peak[-1], normed_new)
             self._peak = np.maximum(0.0, self._peak - PEAK_DECAY)
 
+
     def draw(self):
         h, w = self.scr.getmaxyx()
         if w < 60 or h < 18:
@@ -334,55 +462,132 @@ class App:
             msg = f"resize terminal - need 60x18, got {w}x{h}"
             try:
                 self.scr.addstr(max(0, h // 2), max(0, (w - len(msg)) // 2), msg[:max(0, w - 1)])
-            except:
+            except Exception:
                 pass
             self.scr.noutrefresh(); curses.doupdate()
             return
 
         self.scr.erase()
 
-        for y, x, text, attr in render.compose(
-            w, h, self.state, self.transcript, self.type_pos, self.err,
-            self.tick, self.spin_i,
-            self._hist.copy() if self.state in ("listening", "draining") else None,
-            self.show_dev, list(self.dev_log), VERSION,
-            f"{MODELS[self.model_idx][1]} {_model_status.get(MODELS[self.model_idx][0], '?')}",
-            self._wave_ceil, self._done_tick,
-            self.theme,
-            self._clipboard_tick, self.auto_copy,
-            self._hist_idx, len(self._history),
-            self._proc_tick, self._model_was_cold,
-        ):
+        model_label = (
+            f"{MODELS[self.model_idx][1]} "
+            f"{_model_status.get(MODELS[self.model_idx][0], '?')}"
+            f"{(' ' + self._transcribe_device) if self._transcribe_device else ''}"
+        )
+
+        if self._in_settings:
+            runs = render.compose_settings(
+                w, h, self._settings_items(), self._settings_row, self.theme,
+            )
+        else:
+            runs = render.compose(
+                w, h, self.state, self.transcript, self.type_pos, self.err,
+                self.tick, self.spin_i,
+                self._hist.copy() if self.state in ("listening", "draining") else None,
+                self.show_dev, list(self.dev_log), VERSION,
+                model_label, self._wave_ceil, self._done_tick,
+                self.theme,
+                self._clipboard_tick, self.auto_copy,
+                self._hist_idx, len(self._history),
+                self._proc_tick, self._model_was_cold, self._model_loaded,
+                self._scroll_offset,
+                self._last_word_count, self._last_audio_secs,
+            )
+
+        for y, x, text, attr in runs:
             try:
                 self.scr.addstr(y, x, text, attr)
-            except:
+            except Exception:
                 pass
 
         try:
             self.scr.move(h - 1, 0)
-        except:
+        except Exception:
             pass
         self.scr.noutrefresh(); curses.doupdate()
 
-    def run(self):
+    def inject_audio(self, path: str):
+        import wave, subprocess as sp
+        ext = Path(path).suffix.lower()
+        ffmpeg_exts = {".m4a", ".mp3", ".aac", ".ogg", ".flac", ".mp4", ".webm"}
+
+        if ext in ffmpeg_exts:
+            try:
+                proc = sp.run(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                     "-i", path, "-f", "f32le", "-ac", "1",
+                     "-ar", str(SAMPLE_RATE), "-"],
+                    stdout=sp.PIPE, stderr=sp.PIPE, check=True,
+                )
+            except FileNotFoundError:
+                raise RuntimeError("ffmpeg not found — install it to load M4A/MP3 files")
+            audio = np.frombuffer(proc.stdout, dtype=np.float32)
+        else:
+            try:
+                import soundfile as sf
+                audio, sr = sf.read(path, dtype="float32", always_2d=False)
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                if sr != SAMPLE_RATE:
+                    import math
+                    from scipy.signal import resample_poly
+                    g = math.gcd(SAMPLE_RATE, sr)
+                    audio = resample_poly(audio, SAMPLE_RATE // g, sr // g).astype(np.float32)
+            except ImportError:
+                with wave.open(path, "rb") as wf:
+                    sr = wf.getframerate()
+                    raw = wf.readframes(wf.getnframes())
+                    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    if wf.getnchannels() == 2:
+                        audio = audio.reshape(-1, 2).mean(axis=1)
+                    if sr != SAMPLE_RATE:
+                        new_len = int(len(audio) * SAMPLE_RATE / sr)
+                        audio = np.interp(np.linspace(0, len(audio) - 1, new_len),
+                                          np.arange(len(audio)), audio).astype(np.float32)
+        self._captured = audio
+        self._drain_tick = 999
+        self.state = "processing"
+        self._result_evt.clear()
+        self._cancel_evt.clear()
+        self._result = None
+        self._proc_tick = 0
+        self._model_loaded = False
+        mid = MODELS[self.model_idx][0]
+        self._model_was_cold = _model_status.get(mid) != "●"
+        threading.Thread(target=self._do_transcribe, args=(audio, mid), daemon=True).start()
+
+    def run(self, input_path: str | None = None):
         curses.curs_set(0); self.scr.nodelay(1); self.scr.keypad(1)
         if not curses.has_colors():
             raise SystemExit("tinytalk requires a colour terminal")
         curses.start_color(); curses.use_default_colors()
         self.theme = _build_theme()
+        curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+        curses.mouseinterval(0)
+        if input_path:
+            self.inject_audio(input_path)
         try:
             while True:
                 key = self.scr.getch()
                 if not self.handle_key(key):
                     break
                 self.step(); self.draw()
-                time.sleep(FRAME_DT)
+                if self.state in ("idle", "done") and not self._in_settings:
+                    time.sleep(1 / 20)
+                else:
+                    time.sleep(FRAME_DT)
         finally:
             self.audio.stop()
 
 
 def main():
-    import locale, os
+    import locale, os, argparse
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--input", metavar="FILE", default=None)
+    args, _ = p.parse_known_args()
+
+    if sys.platform == "win32":
+        os.system("chcp 65001 >nul 2>&1")
     try:
         locale.setlocale(locale.LC_ALL, "")
     except locale.Error:
@@ -395,14 +600,23 @@ def main():
     if "ascii" in cfg:
         render.USE_ASCII = bool(cfg["ascii"])
     else:
-        enc = locale.getpreferredencoding(False)
-        try:
-            "┌│└".encode(enc)
-            render.USE_ASCII = False
-        except (UnicodeEncodeError, LookupError):
-            render.USE_ASCII = True
+        if sys.platform == "win32":
+            import io
+            stdout_enc = getattr(sys.stdout, "encoding", "") or ""
+            render.USE_ASCII = "utf" not in stdout_enc.lower()
+        else:
+            enc = locale.getpreferredencoding(False)
+            try:
+                "┌│└".encode(enc)
+                render.USE_ASCII = False
+            except (UnicodeEncodeError, LookupError):
+                render.USE_ASCII = True
+
+    input_path = args.input
+    if input_path and not Path(input_path).is_absolute():
+        input_path = str(Path("audio-input") / input_path)
 
     try:
-        curses.wrapper(lambda scr: App(scr).run())
+        curses.wrapper(lambda scr: App(scr).run(input_path))
     except KeyboardInterrupt:
         pass
