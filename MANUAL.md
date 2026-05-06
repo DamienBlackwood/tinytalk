@@ -33,49 +33,47 @@ There are five models you can cycle through using `m` / `M`. The available model
 
 **macOS (MLX):**
 
-| Label  | Model                     |
-|--------|---------------------------|
-| TINY   | whisper-tiny              | 
-| BASE   | whisper-base              |
-| SMALL  | whisper-small             |
-| MEDIUM | whisper-medium            |
-| TURBO  | whisper-large-v3-turbo    |
+| Label  | Model                  | Size    |
+|--------|------------------------|---------|
+| TINY   | whisper-tiny           | ~71MB   |
+| BASE   | whisper-base-mlx       | ~137MB  |
+| MEDIUM | whisper-medium-mlx     | ~1.5GB  |
+| TURBO  | whisper-large-v3-turbo | ~1.5GB  |
 
-Models must be downloaded manually before use:
+Models download automatically on first use. To pre-download manually:
 
 ```bash
 hf download mlx-community/whisper-large-v3-turbo
 ```
 
-Browse all available MLX Whisper models: https://huggingface.co/mlx-community
+Check all available MLX Whisper models: https://huggingface.co/mlx-community
 
-**Windows / Linux (faster-whisper):**
+**Windows (faster-whisper):**
 
-## update to make sure accurate sizes
-| Label  | Model                  | Size |
-|--------|------------------------|------|
-| TINY   | faster-whisper-tiny    | ~XMB |
-| BASE   | faster-whisper-base    | ~XMB |
-| SMALL  | faster-whisper-small   | ~XMB |
-| MEDIUM | faster-whisper-medium  | ~XGB |
-| LARGE  | faster-whisper-large-v3| ~XGB |
+| Label  | Model                   | Size   |
+|--------|-------------------------|--------|
+| TINY   | faster-whisper-tiny     | ~75MB  |
+| BASE   | faster-whisper-base     | ~141MB |
+| SMALL  | faster-whisper-small    | ~464MB |
+| MEDIUM | faster-whisper-medium   | ~1.5GB |
+| LARGE  | faster-whisper-large-v3 | ~3GB   |
 
-Models download automatically on first use for that model. You can also download manually:
+Models download automatically on first use. To pre-download manually:
 
 ```powershell
 hf download Systran/faster-whisper-tiny
 ```
 
-Check all the available faster-whipser models here: https://huggingface.co/Systran
+Check all available faster-whisper models: https://huggingface.co/Systran
 
 Models are cached at `~/.cache/huggingface/hub/` and only download once.
 
 **Model status icons:**
 
-- `✗` — Not cached. Will download automatically on first use (Windows/Linux) or must be downloaded manually (macOS).
+- `✗` — Not cached. Will download automatically on first use (requires `hf auth login`).
 - `↓` — Cached on disk.
 - `●` — Locked and loaded.
-- `↻` — Downloading now. (Still a work in progress)
+- `↻` — Downloading now.
 
 # INSTALLATION
 

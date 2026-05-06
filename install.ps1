@@ -1,3 +1,5 @@
+param([switch]$Force)
+
 $ErrorActionPreference = "Stop"
 
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -14,12 +16,21 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+if (Test-Path $Venv) {
+    if (-not $Force) {
+        $answer = Read-Host "existing install found. reinstall? [y/N]"
+        if ($answer -notmatch '^[Yy]$') { Write-Host "aborted."; exit 0 }
+    }
+    Write-Host "removing existing venv..."
+    Remove-Item -Recurse -Force $Venv
+}
+
 Write-Host "creating venv..."
 python -m venv $Venv
 & $Pip install --upgrade pip -q
 Write-Host ""
 
-Write-Host "Windows — installing faster-whisper"
+Write-Host "Windows found, installing faster-whisper"
 & $Pip install faster-whisper windows-curses numpy sounddevice scipy -q
 
 if ($LASTEXITCODE -ne 0) {
@@ -35,14 +46,14 @@ Write-Host "done."
 
 Write-Host ""
 Write-Host "optional models (run these to install more):"
-Write-Host "  base   ~290MB   hf download Systran/faster-whisper-base"
-Write-Host "  small  ~970MB   hf download Systran/faster-whisper-small"
-Write-Host "  medium ~3GB     hf download Systran/faster-whisper-medium"
-Write-Host "  large  ~6GB     hf download Systran/faster-whisper-large-v3"
+Write-Host "  base   ~141MB   hf download Systran/faster-whisper-base"
+Write-Host "  small  ~464MB   hf download Systran/faster-whisper-small"
+Write-Host "  medium ~1.5GB   hf download Systran/faster-whisper-medium"
+Write-Host "  large  ~3GB     hf download Systran/faster-whisper-large-v3"
 Write-Host ""
 Write-Host "  browse all: https://huggingface.co/Systran"
 Write-Host "  have a HuggingFace token? set it first for faster downloads:"
-Write-Host "    hf login"
+Write-Host "    hf auth login"
 
 Write-Host ""
 Write-Host "run: & '$Python' tinytalk.py"

@@ -1,6 +1,6 @@
 # tinytalk
 
-Push-to-talk terminal transcription using local on-device Whisper. macOS uses MLX, Windows and Linux use faster-whisper with automatic GPU acceleration (CUDA) and CPU fallback. No data leaves your device.
+Push-to-talk terminal transcription using local on-device Whisper. macOS uses MLX, Windows uses faster-whisper with automatic GPU acceleration (CUDA) and CPU fallback. No data leaves your device.
 
 Press space to start recording, press again to stop and transcribe.
 
@@ -14,29 +14,37 @@ Full documentation is in `MANUAL.md`.
 
 ## Quick start
 
-Python 3.11+ required.
+Python 3.11+ required. Clone the repo, then run the installer for your platform.
 
 **macOS (Apple Silicon):**
 ```bash
 git clone https://github.com/DamienBlackwood/tinytalk.git && cd tinytalk
-./install.sh
-.venv/bin/python tinytalk.py
+chmod +x install.sh && ./install.sh
+tinytalk
 ```
 
 **Windows:**
 ```powershell
-git clone https://github.com/DamienBlackwood/tinytalk.git; cd tinytalk
+git clone https://github.com/DamienBlackwood/tinytalk.git
+cd tinytalk
 .\install.ps1
 & .\.venv\Scripts\python.exe tinytalk.py
 ```
 
-On Windows, models download automatically on first use. On macOS, see `MANUAL.md` for model setup. (I'll get to automating it soon, kinda a WIP)
+Or install directly from a release (no cloning needed):
+```bash
+pipx install https://github.com/DamienBlackwood/tinytalk/releases/download/v0.2.0/tinytalk-0.2.0-py3-none-any.whl
+```
+
+Models download automatically the first time you use them.
+
+**To update:** `git pull && ./install.sh --force` (or `.\install.ps1 -Force` on Windows).
 
 ## Rationale
 
 I wanted something quick and keyboard driven to make audio transcription without going through any cloud providers. On Apple Silicon, the Whisper model runs fast enough to perform transcription in "realtime" (after the initial load & compile) without uploading audio anywhere. It uses raw curses the same way my other project, [kmatrix](https://github.com/DamienBlackwood/kmatrix), does.
 
-For now, this was mostly just a means of honing my implementation of curses and because the application is *relatively* simple (compared to my other projects). Stuff like transcriptions showing work well, and the UI is polished enough for my standards, but it doesn't really do anything with the output aside from displaying it, I'll probably add ~~clipboard copying~~ and/or piping it to another command/application soon.
+I plan to upload this to PyPI once it is more polished and ready.
 
 ## Under the hood (reflections for me)
 

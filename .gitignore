@@ -2,8 +2,9 @@
 .tinytalk/
 __pycache__/
 *.pyc
-venv/
+.venv/
 *.egg-info/
 dist/
 build/
 audio-input
+TODO.md

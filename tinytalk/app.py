@@ -1,8 +1,10 @@
 import curses, json, threading, time, collections, subprocess, sys, numpy as np
+
+BUTTON5_PRESSED = getattr(curses, "BUTTON5_PRESSED", 2097152)
 from pathlib import Path
 from . import render
 from .audio import AudioCapture, SAMPLE_RATE
-from .whisper import transcribe, is_model_cached, set_status_callback
+from .whisper import transcribe, is_model_cached, check_token, download_model
 
 VERSION  = "v0.2"
 FRAME_DT = 1 / 60
@@ -11,9 +13,8 @@ TYPE_DT  = 0.016
 if sys.platform == "darwin":
     MODELS = [
         ("mlx-community/whisper-tiny",           "TINY"),
-        ("mlx-community/whisper-base",           "BASE"),
-        ("mlx-community/whisper-small",          "SMALL"),
-        ("mlx-community/whisper-medium",         "MEDIUM"),
+        ("mlx-community/whisper-base-mlx",       "BASE"),
+        ("mlx-community/whisper-medium-mlx",     "MEDIUM"),
         ("mlx-community/whisper-large-v3-turbo", "TURBO"),
     ]
 else:
@@ -24,7 +25,7 @@ else:
         ("Systran/faster-whisper-medium",   "MEDIUM"),
         ("Systran/faster-whisper-large-v3", "LARGE"),
     ]
-DEFAULT_MODEL_IDX = 0 if sys.platform != "darwin" else 4
+DEFAULT_MODEL_IDX = 0 if sys.platform != "darwin" else 3
 
 _model_status: dict[str, str] = {}
 _CFG_PATH = Path(__file__).parent.parent / ".tinytalk" / "config.json"
@@ -129,6 +130,7 @@ class App:
         self.model_idx  = cfg.get("model_idx", DEFAULT_MODEL_IDX)
         if not (0 <= self.model_idx < len(MODELS)):
             self.model_idx = DEFAULT_MODEL_IDX
+        self._active_model_idx = self.model_idx   # session
         self.show_dev  = cfg.get("show_dev",   False)
         self.auto_copy = cfg.get("auto_copy",  False)
         self.typewriter = cfg.get("typewriter", True)
@@ -150,6 +152,7 @@ class App:
         self._proc_tick = 0
         self._model_was_cold = False
         self._model_loaded = False
+        self._download_pct = -1.0   # -1 set as not downloading by default
         self._transcribe_device = None
         self._scroll_offset = 0
         self._last_word_count = 0
@@ -185,10 +188,10 @@ class App:
         if key == curses.KEY_MOUSE:
             try:
                 _, _mx, _my, _mz, bstate = curses.getmouse()
-                if bstate & curses.BUTTON4_PRESSED:   # scroll up 
+                if bstate & curses.BUTTON4_PRESSED:
                     if self.state == "done":
                         self._scroll_offset = max(0, self._scroll_offset - 1)
-                elif bstate & curses.BUTTON5_PRESSED:  # scroll down
+                elif bstate & BUTTON5_PRESSED:
                     if self.state == "done":
                         self._scroll_offset += 1
             except curses.error:
@@ -205,6 +208,11 @@ class App:
             self.show_dev = not self.show_dev
             _save_state(self)
             self.scr.clear()
+        elif key in (ord('m'), ord('M')):
+            if self.state not in ("listening", "processing", "draining"):
+                d = -1 if key == ord('M') else 1
+                self._active_model_idx = (self._active_model_idx + d) % len(MODELS)
+                self._probe_active_model()
         elif key in (ord('c'), ord('C')):
             if self.state == "done" and self.transcript:
                 self._do_copy()
@@ -244,7 +252,7 @@ class App:
                 _, _mx, _my, _mz, bstate = curses.getmouse()
                 if bstate & curses.BUTTON4_PRESSED:
                     self._settings_row = max(0, self._settings_row - 1)
-                elif bstate & curses.BUTTON5_PRESSED:
+                elif bstate & BUTTON5_PRESSED:
                     self._settings_row = min(len(settings) - 1, self._settings_row + 1)
             except curses.error:
                 pass
@@ -295,6 +303,7 @@ class App:
         elif kind == "cycle" and options:
             if label == "Model" and self.state not in ("listening", "processing", "draining"):
                 self.model_idx = (self.model_idx + delta) % len(MODELS)
+                self._active_model_idx = self.model_idx
                 _save_state(self)
                 self._probe_current_model()
 
@@ -315,6 +324,13 @@ class App:
         if _model_status.get(mid) not in ("↓", "●"):
             _model_status[mid] = "?"
             threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
+
+    def _probe_active_model(self):
+        mid = MODELS[self._active_model_idx][0]
+        if _model_status.get(mid) not in ("↓", "●"):
+            _model_status[mid] = "?"
+            t = threading.Thread(target=_probe_model_status, args=(mid,), daemon=True)
+            t.start()
 
     def _do_copy(self):
         try:
@@ -347,16 +363,32 @@ class App:
             self._cancel_evt.clear(); return
         t0 = time.perf_counter()
 
-        def _on_status(s):
-            if s == "downloading":
-                _model_status[model_id] = "↻"
-            elif s == "loaded":
-                _model_status[model_id] = "●"
-                self._model_loaded = True
-        set_status_callback(_on_status)
+        if not is_model_cached(model_id):
+            token = check_token()
+            if not token:
+                self._result = RuntimeError(
+                    "model not downloaded  -  run: hf auth login  then try again"
+                )
+                self._result_evt.set()
+                return
+
+            _model_status[model_id] = "↻"
+            self._download_pct = 0.0
+
+            try:
+                download_model(model_id, progress_cb=lambda pct: setattr(self, "_download_pct", pct))
+            except Exception as e:
+                self._download_pct = -1.0
+                self._result = RuntimeError(f"download failed: {e}")
+                self._result_evt.set()
+                return
+
+            self._download_pct = -1.0
+            _model_status[model_id] = "↓"
 
         try:
             text, device = transcribe(audio, model_id, SAMPLE_RATE)
+            self._model_loaded = True
             self._result = text
             _model_status[model_id] = "●"
             if device:
@@ -365,12 +397,12 @@ class App:
             elapsed    = time.perf_counter() - t0
             words      = len(text.split()) if text.strip() else 0
             ratio      = total_secs / elapsed if elapsed > 0 else 0
-            label      = MODELS[self.model_idx][1]
+            label      = MODELS[self._active_model_idx][1]
 
             self._last_word_count = words
             self._last_audio_secs = total_secs
-            self.dev_log.append(f"{total_secs:.1f}s audio  →  {elapsed:.1f}s  ({ratio:.1f}×)")
-            self.dev_log.append(f"{words} words  ·  {label}")
+            self.dev_log.append(f"{total_secs:.1f}s audio  ->  {elapsed:.1f}s  ({ratio:.1f}x)")
+            self.dev_log.append(f"{words} words  .  {label}")
         except Exception as e:
             self._result = e
             self.dev_log.append(f"err: {e}")
@@ -429,7 +461,7 @@ class App:
                 self._result = None
                 self._proc_tick = 0
                 self._model_loaded = False
-                mid = MODELS[self.model_idx][0]
+                mid = MODELS[self._active_model_idx][0]
                 self._model_was_cold = _model_status.get(mid) != "●"
                 threading.Thread(
                     target=self._do_transcribe,
@@ -470,8 +502,8 @@ class App:
         self.scr.erase()
 
         model_label = (
-            f"{MODELS[self.model_idx][1]} "
-            f"{_model_status.get(MODELS[self.model_idx][0], '?')}"
+            f"{MODELS[self._active_model_idx][1]} "
+            f"{_model_status.get(MODELS[self._active_model_idx][0], '?')}"
             f"{(' ' + self._transcribe_device) if self._transcribe_device else ''}"
         )
 
@@ -490,6 +522,7 @@ class App:
                 self._clipboard_tick, self.auto_copy,
                 self._hist_idx, len(self._history),
                 self._proc_tick, self._model_was_cold, self._model_loaded,
+                self._download_pct,
                 self._scroll_offset,
                 self._last_word_count, self._last_audio_secs,
             )
@@ -520,7 +553,7 @@ class App:
                     stdout=sp.PIPE, stderr=sp.PIPE, check=True,
                 )
             except FileNotFoundError:
-                raise RuntimeError("ffmpeg not found — install it to load M4A/MP3 files")
+                raise RuntimeError("ffmpeg not found, install it to load M4A/MP3 files")
             audio = np.frombuffer(proc.stdout, dtype=np.float32)
         else:
             try:
@@ -552,7 +585,7 @@ class App:
         self._result = None
         self._proc_tick = 0
         self._model_loaded = False
-        mid = MODELS[self.model_idx][0]
+        mid = MODELS[self._active_model_idx][0]
         self._model_was_cold = _model_status.get(mid) != "●"
         threading.Thread(target=self._do_transcribe, args=(audio, mid), daemon=True).start()
 

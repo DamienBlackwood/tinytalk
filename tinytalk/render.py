@@ -308,7 +308,7 @@ def _scrollbar(y0, height, total_lines, visible_lines, offset, x, theme):
 
 
 _SETTING_HINTS = {
-    "Model":      "larger = more accurate, slower",
+    "Default model":      "larger = more accurate, slower",
     "Auto-copy":  "copy to clipboard when done",
     "Typewriter": "animate text character by character",
     "Dev panel":  "show timing info",
@@ -392,10 +392,32 @@ def compose_settings(w, h, items, selected_row, theme):
     return runs
 
 
+def _download_bar(pct: float, width: int, theme, tick: int):
+    g       = _g()
+    filled  = int(pct * width)
+    bar     = []
+
+    BLOCKS  = " ░▒▓█"
+    FULL    = BLOCKS[-1]
+    EMPTY   = BLOCKS[0]
+
+    for i in range(width):
+        if i < filled - 1:
+            bar.append(FULL if not USE_ASCII else "#")
+        elif i == filled - 1:
+            sub = int((pct * width - filled) * (len(BLOCKS) - 1))
+            bar.append(BLOCKS[max(0, min(sub + 2, len(BLOCKS) - 1))] if not USE_ASCII else "#")
+        else:
+            bar.append(EMPTY if not USE_ASCII else ".")
+
+    return "".join(bar)
+
+
 def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
             show_dev, dev_log, version, model, wave_ceil, done_tick, theme,
             clipboard_tick=0, auto_copy=False, hist_idx=-1, hist_len=0,
             proc_tick=0, model_was_cold=False, model_loaded=False,
+            download_pct=-1.0,
             scroll_offset=0, word_count=0, audio_secs=0.0):
     runs = []
     g = _g()
@@ -444,16 +466,20 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
     wave_x = box_x + _cx(box_w, " " * wave_w)
     wave_y = cur_y
 
-    if state in ("listening", "draining"):
+    if download_pct >= 0.0:
+        cur_y += 2
+    elif state in ("listening", "draining"):
         runs.extend(waveform_active(wave_y, wave_x, wave_w, WH, hist, theme, wave_ceil))
+        cur_y += WH + 2
     elif state == "processing":
         runs.extend(waveform_processing(wave_y, wave_x, wave_w, WH, theme, tick))
+        cur_y += WH + 2
     elif state == "done":
         runs.extend(waveform_done(wave_y, wave_x, wave_w, WH, theme))
+        cur_y += WH + 2
     else:
         runs.extend(waveform_idle(wave_y, wave_x, wave_w, WH, theme, tick))
-
-    cur_y += WH + 2
+        cur_y += WH + 2
 
     tx_w = min(72, iw - 4)   
     tx_x = box_x + _cx(box_w, " " * (tx_w + 2))
@@ -481,7 +507,6 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         all_lines     = wrap(transcript[:type_pos], tx_w)
         visible_h     = max(1, text_max_y - cur_y + 1)
         total_lines   = len(all_lines)
-        # clamp scroll (first time using mouse behaviour with curses, so I need to be thorough)
         max_offset    = max(0, total_lines - visible_h)
         scroll_offset = min(scroll_offset, max_offset)
         visible_lines = all_lines[scroll_offset: scroll_offset + visible_h]
@@ -503,24 +528,48 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         cur_y += min(total_lines, visible_h)
 
     elif state == "idle":
-        hint      = ("press SPACE to speak  —  model will download on first use"
-                     if "✗" in model else "press SPACE to speak")
-        runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
-        cur_y += 1
+        if "✗" in model:
+            hint     = "press SPACE to speak  -  model downloads automatically"
+            hint2    = "make sure you've run:  hf auth login"
+            runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
+            cur_y += 1
+            runs.append((cur_y, box_x + _cx(box_w, hint2), hint2, theme.dim))
+            cur_y += 1
+        else:
+            hint = "press SPACE to speak"
+            runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
+            cur_y += 1
     elif state == "listening":
         runs.append((cur_y, box_x + _cx(box_w, "SPACE to stop"),
                      "SPACE to stop", theme.label))
         cur_y += 1
     elif state == "processing":
         proc_attr = theme.proc if (tick % 40) < 28 else theme.proc_soft
-        if "↻" in model:
-            label = "downloading model  —  this only happens once"
+        if download_pct >= 0.0:
+            bar_w   = min(40, iw - 8)
+            bar_str = _download_bar(download_pct, bar_w, theme, tick)
+            pct_str = f"{int(download_pct * 100):3d}%"
+            label   = f"downloading  {pct_str}"
+            runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
+            cur_y += 1
+            bar_x = box_x + _cx(box_w, bar_str)
+            filled_n = int(download_pct * bar_w)
+            if filled_n > 0:
+                runs.append((cur_y, bar_x, bar_str[:filled_n], theme.done))
+            if filled_n < bar_w:
+                runs.append((cur_y, bar_x + filled_n, bar_str[filled_n:], theme.dim))
+            cur_y += 1
+            sub = "this only happens once"
+            runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.dim))
+            cur_y += 1
         elif model_was_cold and not model_loaded:
             label = "loading model"
+            runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
+            cur_y += 1
         else:
             label = "transcribing"
-        runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
-        cur_y += 1
+            runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
+            cur_y += 1
 
     stat_y = min(cur_y, text_max_y + 1)
     if state == "done" and word_count > 0:
@@ -542,8 +591,8 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
 
     auto_tag = "autocopy on" if auto_copy else "autocopy off"
     kmap = {
-        "idle":       [("SPC", "record"), ("S", "settings"), ("H", "dev"), ("Q", "quit")],
-        "done":       [("SPC", "again"), ("C", "copy"), ("↑↓", "scroll"), ("[/]", "hist"), ("S", "settings"), ("ESC", "clear")],
+        "idle":       [("SPC", "record"), ("m/M", "model"), ("S", "settings"), ("H", "dev"), ("Q", "quit")],
+        "done":       [("SPC", "again"), ("m/M", "model"), ("C", "copy"), ("↑↓", "scroll"), ("[/]", "hist"), ("S", "settings"), ("ESC", "clear")],
         "listening":  [("SPC", "stop"), ("ESC", "cancel"), ("Q", "quit")],
         "processing": [("SPC", "cancel"), ("ESC", "cancel")],
     }
