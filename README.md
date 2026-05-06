@@ -14,31 +14,11 @@ Full documentation is in `MANUAL.md`.
 
 ## Quick start
 
-Python 3.11+ required. Clone the repo, then run the installer for your platform.
+Download the latest release from the [releases page](https://github.com/DamienBlackwood/tinytalk/releases). (Currently for macOS only for now)
 
-**macOS (Apple Silicon):**
-```bash
-git clone https://github.com/DamienBlackwood/tinytalk.git && cd tinytalk
-chmod +x install.sh && ./install.sh
-tinytalk
-```
+Install instructions for each platform are in [`MANUAL.md`](MANUAL.md).
 
-**Windows:**
-```powershell
-git clone https://github.com/DamienBlackwood/tinytalk.git
-cd tinytalk
-.\install.ps1
-& .\.venv\Scripts\python.exe tinytalk.py
-```
-
-Or install directly from a release (no cloning needed):
-```bash
-pipx install https://github.com/DamienBlackwood/tinytalk/releases/download/v0.2.0/tinytalk-0.2.0-py3-none-any.whl
-```
-
-Models download automatically the first time you use them.
-
-**To update:** `git pull && ./install.sh --force` (or `.\install.ps1 -Force` on Windows).
+Models download automatically the first time you try to use them!
 
 ## Rationale
 
