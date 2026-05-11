@@ -20,6 +20,8 @@ Install instructions for each platform are in [`MANUAL.md`](MANUAL.md).
 
 Models download automatically the first time you try to use them!
 
+As apposed to just transcribing live audio, you can run `--input file.mp3` to transcribe an audio file instead of recording. (I plan to *formally* add video format support, by explicitly extracting audio.)
+
 ## Rationale
 
 I wanted something quick and keyboard driven to make audio transcription without going through any cloud providers. On Apple Silicon, the Whisper model runs fast enough to perform transcription in "realtime" (after the initial load & compile) without uploading audio anywhere. It uses raw curses the same way my other project, [kmatrix](https://github.com/DamienBlackwood/kmatrix), does.

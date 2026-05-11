@@ -116,8 +116,9 @@ def _build_theme():
 
 
 class App:
-    def __init__(self, scr):
+    def __init__(self, scr, mock=False):
         self.scr   = scr
+        self._mock = mock
         self.audio = AudioCapture()
         self.state = "idle"
         self.transcript = ""
@@ -188,14 +189,15 @@ class App:
         if key == curses.KEY_MOUSE:
             try:
                 _, _mx, _my, _mz, bstate = curses.getmouse()
+                self.dev_log.append(f"mouse bstate={bstate:#010x}")
                 if bstate & curses.BUTTON4_PRESSED:
                     if self.state == "done":
                         self._scroll_offset = max(0, self._scroll_offset - 1)
                 elif bstate & BUTTON5_PRESSED:
                     if self.state == "done":
                         self._scroll_offset += 1
-            except curses.error:
-                pass
+            except curses.error as e:
+                self.dev_log.append(f"mouse err: {e}")
             return True
         if key == curses.KEY_RESIZE:
             self._scroll_offset = 0
@@ -361,6 +363,12 @@ class App:
     def _do_transcribe(self, audio, model_id):
         if self._cancel_evt.is_set():
             self._cancel_evt.clear(); return
+        if self._mock:
+            time.sleep(0.3)
+            self._result = _MOCK_TEXT
+            self._model_loaded = True
+            self._result_evt.set()
+            return
         t0 = time.perf_counter()
 
         if not is_model_cached(model_id):
@@ -613,10 +621,47 @@ class App:
             self.audio.stop()
 
 
+_MOCK_TEXT = (
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis finibus enim a sagittis fringilla. "
+    "Aliquam erat volutpat. Morbi quis nulla condimentum, auctor diam in, ultricies magna. Curabitur sit "
+    "amet condimentum dolor. Mauris efficitur nulla magna, et venenatis libero eleifend eget. Praesent in "
+    "dapibus lacus, quis pellentesque urna. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices "
+    "posuere cubilia curae; Morbi sagittis, turpis et tincidunt malesuada, nisl elit efficitur enim, sed "
+    "venenatis eros eros iaculis mi. Mauris vehicula consectetur hendrerit. Nulla quis dolor et turpis "
+    "consequat volutpat. Phasellus tortor odio, eleifend vitae velit sed, tempor mattis risus. "
+    "Vivamus vitae odio arcu. Proin malesuada odio rhoncus, congue urna eu, pulvinar dolor. Nam id orci quam. "
+    "Mauris rhoncus dui sapien, eget elementum leo semper tempor. Pellentesque ullamcorper est libero, at "
+    "scelerisque tortor pulvinar quis. Proin interdum ac nibh sit amet elementum. Ut ac purus id tortor "
+    "suscipit facilisis. Curabitur ipsum metus, rutrum ut feugiat eu, ullamcorper quis metus. Mauris in augue "
+    "magna. Quisque quis volutpat enim. Sed quis leo eget dui pulvinar maximus eu a sapien. In dignissim "
+    "commodo turpis non viverra. In quam massa, pulvinar at maximus sit amet, blandit nec metus. Vestibulum "
+    "gravida nisl malesuada, finibus odio id, tempus dolor. Praesent dictum imperdiet lacus eu viverra. "
+    "Aenean egestas, massa at egestas commodo, sem nulla lacinia arcu, vel accumsan nunc odio a dolor. Donec "
+    "ac hendrerit arcu. Maecenas vel nunc laoreet, feugiat elit vitae, posuere felis. Morbi porttitor rutrum "
+    "efficitur. Duis lobortis auctor augue, quis dignissim metus aliquet quis. Proin egestas ligula arcu, sit "
+    "amet aliquet ante rhoncus in. Donec in enim nec augue volutpat vehicula. Aenean velit arcu, auctor a "
+    "porta ac, cursus at orci. Proin convallis arcu neque, iaculis efficitur leo interdum eget. Maecenas "
+    "venenatis sapien eros, ac pellentesque enim auctor et. Donec scelerisque vestibulum semper. Sed posuere "
+    "scelerisque nulla et blandit. Duis erat lorem, congue nec sem quis, porttitor iaculis metus. Nullam non "
+    "ipsum at est fringilla faucibus. Donec id sem ligula. Morbi risus mauris, pharetra id mi sed, efficitur "
+    "placerat lacus. Proin elementum enim at quam efficitur, sed dapibus erat ultrices. Mauris suscipit ligula "
+    "in diam lobortis, in iaculis dui condimentum. Phasellus fringilla orci eu congue commodo. Nullam sagittis "
+    "dignissim faucibus. Donec a maximus turpis. Maecenas diam risus, interdum nec nunc ac, maximus malesuada "
+    "dui. Suspendisse faucibus maximus ante nec vehicula. Vivamus ultricies accumsan mauris, ac imperdiet magna "
+    "lobortis vitae. Phasellus eleifend diam mauris, vitae mollis mauris dapibus et. Fusce consectetur massa "
+    "mi, eu tincidunt ligula sodales consectetur. Nulla metus turpis, elementum posuere arcu ac, maximus "
+    "placerat purus. Quisque id lorem euismod, imperdiet nisi ut, finibus tortor. Cras auctor tristique "
+    "feugiat. Curabitur ac mattis felis. Fusce porta ipsum risus, quis condimentum mi bibendum sit amet. "
+    "Donec condimentum leo diam, in scelerisque neque porta sit amet. Nunc hendrerit id dui vitae fringilla. "
+    "Etiam tristique interdum metus non vulputate. Nulla viverra sed ex in congue. Nunc in molestie nibh. "
+    "Suspendisse cursus ligula sapien. Nunc metus sem."
+)
+
 def main():
     import locale, os, argparse
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--input", metavar="FILE", default=None)
+    p.add_argument("--mock", action="store_true")
     args, _ = p.parse_known_args()
 
     if sys.platform == "win32":
@@ -650,6 +695,6 @@ def main():
         input_path = str(Path("audio-input") / input_path)
 
     try:
-        curses.wrapper(lambda scr: App(scr).run(input_path))
+        curses.wrapper(lambda scr: App(scr, mock=args.mock).run(input_path))
     except KeyboardInterrupt:
         pass
