@@ -1,4 +1,7 @@
 import math
+import sys
+from dataclasses import dataclass, field
+from typing import Optional
 import numpy as np
 
 USE_ASCII = False
@@ -56,6 +59,37 @@ WAVE_CEIL = 0.12
 
 class Theme:
     pass
+
+
+@dataclass
+class RenderState:
+    w: int
+    h: int
+    state: str
+    transcript: str
+    type_pos: int
+    err: str
+    tick: int
+    spin_i: int
+    hist: Optional[np.ndarray]
+    show_dev: bool
+    dev_log: list
+    version: str
+    model: str
+    wave_ceil: float
+    done_tick: int
+    theme: "Theme"
+    clipboard_tick: int = 0
+    auto_copy: bool = False
+    hist_idx: int = -1
+    hist_len: int = 0
+    proc_tick: int = 0
+    model_was_cold: bool = False
+    model_loaded: bool = False
+    download_pct: float = -1.0
+    scroll_offset: int = 0
+    word_count: int = 0
+    audio_secs: float = 0.0
 
 
 def wrap(text, width):
@@ -309,13 +343,13 @@ def _scrollbar(y0, height, total_lines, visible_lines, offset, x, theme):
 
 _SETTING_HINTS = {
     "Default model":      "larger = more accurate, slower",
-    "Auto-copy":  "copy to clipboard when done",
-    "Typewriter": "animate text character by character",
-    "Dev panel":  "show timing info",
+    "Auto-copy":  "pretty self-explanatory",
+    "Typewriter": "it looks nice",
+    "Dev panel":  "show timing info & other cool stuff",
 }
 
 
-def compose_settings(w, h, items, selected_row, theme):
+def compose_settings(w, h, items, selected_row, theme, models=None, model_status=None):
     runs = []
     g    = _g()
 
@@ -368,10 +402,9 @@ def compose_settings(w, h, items, selected_row, theme):
 
         elif kind == "cycle":
             val = getter()
-            if label == "Model":
-                from .app import MODELS as _MODELS, _model_status as _ms
-                cur_mid = next((m[0] for m in _MODELS if m[1] == val), None)
-                status  = _ms.get(cur_mid, "?") if cur_mid else ""
+            if label == "Model" and models is not None:
+                cur_mid = next((m[0] for m in models if m[1] == val), None)
+                status  = (model_status or {}).get(cur_mid, "?") if cur_mid else ""
                 inner   = f"{val} {status}".strip()
             else:
                 inner = val
@@ -413,14 +446,35 @@ def _download_bar(pct: float, width: int, theme, tick: int):
     return "".join(bar)
 
 
-def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
-            show_dev, dev_log, version, model, wave_ceil, done_tick, theme,
-            clipboard_tick=0, auto_copy=False, hist_idx=-1, hist_len=0,
-            proc_tick=0, model_was_cold=False, model_loaded=False,
-            download_pct=-1.0,
-            scroll_offset=0, word_count=0, audio_secs=0.0):
+def compose(rs: RenderState):
     runs = []
     g = _g()
+
+    w, h           = rs.w, rs.h
+    state          = rs.state
+    transcript     = rs.transcript
+    type_pos       = rs.type_pos
+    err            = rs.err
+    tick           = rs.tick
+    spin_i         = rs.spin_i
+    hist           = rs.hist
+    show_dev       = rs.show_dev
+    dev_log        = rs.dev_log
+    version        = rs.version
+    model          = rs.model
+    wave_ceil      = rs.wave_ceil
+    done_tick      = rs.done_tick
+    theme          = rs.theme
+    clipboard_tick = rs.clipboard_tick
+    auto_copy      = rs.auto_copy
+    hist_idx       = rs.hist_idx
+    hist_len       = rs.hist_len
+    model_was_cold = rs.model_was_cold
+    model_loaded   = rs.model_loaded
+    download_pct   = rs.download_pct
+    scroll_offset  = rs.scroll_offset
+    word_count     = rs.word_count
+    audio_secs     = rs.audio_secs
 
     PAD   = 2
     box_x = PAD
@@ -441,7 +495,7 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
     runs.append((cur_y, box_x + _cx(box_w, mark), mark, mark_attr))
     cur_y += 1
 
-    backend = "mlx" if __import__("sys").platform == "darwin" else "faster-whisper"
+    backend = "mlx" if sys.platform == "darwin" else "faster-whisper"
     sub = f"on-device transcription {g['BULLET']} whisper {g['BULLET']} {backend} {g['BULLET']} {version}"
     runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.label))
     cur_y += 2
@@ -481,9 +535,9 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         runs.extend(waveform_idle(wave_y, wave_x, wave_w, WH, theme, tick))
         cur_y += WH + 2
 
-    tx_w = min(72, iw - 4)   
+    tx_w = min(72, iw - 4)
     tx_x = box_x + _cx(box_w, " " * (tx_w + 2))
-    sb_x = tx_x + tx_w + 1   
+    sb_x = tx_x + tx_w + 1
 
     foot_y     = box_y + box_h - 2
     text_max_y = foot_y - 3
@@ -502,8 +556,7 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         runs.append((cur_y, tx_x, ("! " + err)[:tx_w], theme.err))
         cur_y += 1
     elif transcript and state == "done":
-        txt_attr      = (theme.text if done_tick > 30 else
-                         theme.mid  if done_tick > 15 else theme.soft)
+        txt_attr      = theme.text if done_tick > 2 else theme.mid
         all_lines     = wrap(transcript[:type_pos], tx_w)
         visible_h     = max(1, text_max_y - cur_y + 1)
         total_lines   = len(all_lines)
@@ -518,10 +571,11 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
             runs.extend(_scrollbar(cur_y, visible_h, total_lines, visible_h, scroll_offset, sb_x, theme))
 
         if type_pos < len(transcript) and visible_lines:
-            cursor_abs = len(all_lines) - 1
+            all_typed  = wrap(transcript[:type_pos], tx_w)
+            cursor_abs = max(0, len(all_typed) - 1)
             cursor_vis = cursor_abs - scroll_offset
-            if 0 <= cursor_vis < visible_h:
-                last = visible_lines[min(cursor_vis, len(visible_lines) - 1)]
+            if 0 <= cursor_vis < len(visible_lines):
+                last = visible_lines[cursor_vis]
                 if (tick // 20) % 2 == 0:
                     runs.append((cur_y + cursor_vis, tx_x + len(last), "|", theme.on))
 
@@ -529,8 +583,8 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
 
     elif state == "idle":
         if "✗" in model:
-            hint     = "press SPACE to speak  -  model downloads automatically"
-            hint2    = "make sure you've run:  hf auth login"
+            hint  = "press SPACE to speak  -  model downloads automatically"
+            hint2 = "make sure you've run:  hf auth login"
             runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
             cur_y += 1
             runs.append((cur_y, box_x + _cx(box_w, hint2), hint2, theme.dim))
@@ -546,13 +600,13 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
     elif state == "processing":
         proc_attr = theme.proc if (tick % 40) < 28 else theme.proc_soft
         if download_pct >= 0.0:
-            bar_w   = min(40, iw - 8)
-            bar_str = _download_bar(download_pct, bar_w, theme, tick)
-            pct_str = f"{int(download_pct * 100):3d}%"
-            label   = f"downloading  {pct_str}"
+            bar_w    = min(40, iw - 8)
+            bar_str  = _download_bar(download_pct, bar_w, theme, tick)
+            pct_str  = f"{int(download_pct * 100):3d}%"
+            label    = f"downloading  {pct_str}"
             runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
             cur_y += 1
-            bar_x = box_x + _cx(box_w, bar_str)
+            bar_x    = box_x + _cx(box_w, bar_str)
             filled_n = int(download_pct * bar_w)
             if filled_n > 0:
                 runs.append((cur_y, bar_x, bar_str[:filled_n], theme.done))
@@ -589,17 +643,15 @@ def compose(w, h, state, transcript, type_pos, err, tick, spin_i, hist,
         for i, line in enumerate(dev_log):
             runs.append((dy + 1 + i, ix + 4, line[:iw - 6], theme.dim))
 
-    auto_tag = "autocopy on" if auto_copy else "autocopy off"
     kmap = {
         "idle":       [("SPC", "record"), ("m/M", "model"), ("S", "settings"), ("H", "dev"), ("Q", "quit")],
         "done":       [("SPC", "again"), ("m/M", "model"), ("C", "copy"), ("↑↓", "scroll"), ("[/]", "hist"), ("S", "settings"), ("ESC", "clear")],
         "listening":  [("SPC", "stop"), ("ESC", "cancel"), ("Q", "quit")],
         "processing": [("SPC", "cancel"), ("ESC", "cancel")],
     }
-    parts     = [f"{k} {v}" for k, v in kmap.get(state, [])]
-    sep       = f"  {g['BULLET']}  "
-    foot_attr = theme.dim
-    runs.append((foot_y, box_x + _cx(box_w, sep.join(parts)), sep.join(parts), foot_attr))
+    parts = [f"{k} {v}" for k, v in kmap.get(state, [])]
+    sep   = f"  {g['BULLET']}  "
+    runs.append((foot_y, box_x + _cx(box_w, sep.join(parts)), sep.join(parts), theme.dim))
 
     runs.extend(chassis_runs)
     return runs

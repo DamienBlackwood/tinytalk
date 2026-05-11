@@ -7,6 +7,11 @@ dependencies = [
     "numpy",
     "sounddevice",
     "scipy",
+    "huggingface_hub[cli]", # i couldn't find the hf one or i forgot it lol
+    "tqdm",
+    "mlx-whisper; sys_platform == 'darwin'",
+    "faster-whisper; sys_platform != 'darwin'",
+    "windows-curses; sys_platform == 'win32'",
 ]
 
 [project.scripts]

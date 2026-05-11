@@ -31,7 +31,7 @@ python -m venv $Venv
 Write-Host ""
 
 Write-Host "Windows found, installing faster-whisper"
-& $Pip install faster-whisper windows-curses numpy sounddevice scipy -q
+& $Pip install faster-whisper windows-curses numpy sounddevice scipy huggingface_hub[cli] tqdm -q
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

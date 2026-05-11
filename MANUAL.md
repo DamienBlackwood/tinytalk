@@ -9,17 +9,17 @@
 `c`
 :   Copy transcript to clipboard (only when done).
 
-`a`
-:   Toggle autocopy so that every result is copied automatically.
-
 `↑` / `↓`
-:   Go through the last 5 transcripts (when done).
+:   Scroll through transcript (when done).
 
-`m`
-:   Cycle through models forward.
+`]` / `[`
+:   Navigate forward/backward through the last 5 transcripts (when done).
 
-`M`
-:   Cycle through models backwards.
+`m` / `M`
+:   Cycle through models forward/backward.
+
+`s`
+:   Open settings (auto-copy, typewriter, dev panel, model).
 
 `h`
 :   Toggle the dev stats panel.
@@ -28,8 +28,6 @@
 :   Quit.
 
 # MODELS
-
-There are five models you can cycle through using `m` / `M`. The available models differ by platform.
 
 **macOS (MLX):**
 
@@ -117,11 +115,12 @@ Supported keys:
   "model_idx": 0,
   "show_dev": false,
   "auto_copy": false,
+  "typewriter": true,
   "ascii": false
 }
 ```
 
-Setting `"ascii": true` forces the ASCII fallback renderer
+Setting `"ascii": true` forces the ASCII fallback renderer. Setting `"typewriter": false` disables the character-by-character animation when showing transcripts.
 
 # TERMINALS
 

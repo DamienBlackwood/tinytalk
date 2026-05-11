@@ -1,6 +1,5 @@
 import curses, json, threading, time, collections, subprocess, sys, numpy as np
 
-BUTTON5_PRESSED = getattr(curses, "BUTTON5_PRESSED", 2097152)
 from pathlib import Path
 from . import render
 from .audio import AudioCapture, SAMPLE_RATE
@@ -28,11 +27,13 @@ else:
 DEFAULT_MODEL_IDX = 0 if sys.platform != "darwin" else 3
 
 _model_status: dict[str, str] = {}
+_model_status_lock = threading.Lock()
 _CFG_PATH = Path(__file__).parent.parent / ".tinytalk" / "config.json"
 
 
 def _probe_model_status(model_id: str):
-    _model_status[model_id] = "↓" if is_model_cached(model_id) else "✗"
+    with _model_status_lock:
+        _model_status[model_id] = "↓" if is_model_cached(model_id) else "✗"
 
 def _load_cfg():
     try:
@@ -48,12 +49,14 @@ def _save_cfg(data):
         pass
 
 def _save_state(app):
-    _save_cfg({
+    cfg = _load_cfg()
+    cfg.update({
         "show_dev":   app.show_dev,
         "model_idx":  app.model_idx,
         "auto_copy":  app.auto_copy,
         "typewriter": app.typewriter,
     })
+    _save_cfg(cfg)
 
 N_BARS = 180
 PEAK_DECAY = 0.012
@@ -163,9 +166,10 @@ class App:
         self._settings_row = 0
 
         mid = MODELS[self.model_idx][0]
-        if mid not in _model_status:
-            _model_status[mid] = "?"
-            threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
+        with _model_status_lock:
+            if mid not in _model_status:
+                _model_status[mid] = "?"
+                threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
         self.theme = None
 
     def handle_key(self, key):
@@ -187,17 +191,6 @@ class App:
                 self._hist[:] = 0.0; self._peak[:] = 0.0; self.scr.clear()
             return True
         if key == curses.KEY_MOUSE:
-            try:
-                _, _mx, _my, _mz, bstate = curses.getmouse()
-                self.dev_log.append(f"mouse bstate={bstate:#010x}")
-                if bstate & curses.BUTTON4_PRESSED:
-                    if self.state == "done":
-                        self._scroll_offset = max(0, self._scroll_offset - 1)
-                elif bstate & BUTTON5_PRESSED:
-                    if self.state == "done":
-                        self._scroll_offset += 1
-            except curses.error as e:
-                self.dev_log.append(f"mouse err: {e}")
             return True
         if key == curses.KEY_RESIZE:
             self._scroll_offset = 0
@@ -223,7 +216,11 @@ class App:
                 self._scroll_offset = max(0, self._scroll_offset - 1)
         elif key == curses.KEY_DOWN:
             if self.state == "done":
-                self._scroll_offset += 1
+                h, w = self.scr.getmaxyx()
+                tx_w = min(72, w - 10)
+                total = len(render.wrap(self.transcript, tx_w))
+                self._scroll_offset = min(self._scroll_offset + 1, max(0, total - 1))
+
         elif key == ord('['):
             if self.state == "done" and self._history:
                 if self._hist_idx == -1:
@@ -250,14 +247,6 @@ class App:
     def _handle_settings_key(self, key):
         settings = self._settings_items()
         if key == curses.KEY_MOUSE:
-            try:
-                _, _mx, _my, _mz, bstate = curses.getmouse()
-                if bstate & curses.BUTTON4_PRESSED:
-                    self._settings_row = max(0, self._settings_row - 1)
-                elif bstate & BUTTON5_PRESSED:
-                    self._settings_row = min(len(settings) - 1, self._settings_row + 1)
-            except curses.error:
-                pass
             return True
         if key in (27, ord('s'), ord('S')):
             self._in_settings = False
@@ -323,16 +312,18 @@ class App:
 
     def _probe_current_model(self):
         mid = MODELS[self.model_idx][0]
-        if _model_status.get(mid) not in ("↓", "●"):
-            _model_status[mid] = "?"
-            threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
+        with _model_status_lock:
+            if _model_status.get(mid) not in ("↓", "●"):
+                _model_status[mid] = "?"
+                threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
 
     def _probe_active_model(self):
         mid = MODELS[self._active_model_idx][0]
-        if _model_status.get(mid) not in ("↓", "●"):
-            _model_status[mid] = "?"
-            t = threading.Thread(target=_probe_model_status, args=(mid,), daemon=True)
-            t.start()
+        with _model_status_lock:
+            if _model_status.get(mid) not in ("↓", "●"):
+                _model_status[mid] = "?"
+                t = threading.Thread(target=_probe_model_status, args=(mid,), daemon=True)
+                t.start()
 
     def _do_copy(self):
         try:
@@ -380,7 +371,8 @@ class App:
                 self._result_evt.set()
                 return
 
-            _model_status[model_id] = "↻"
+            with _model_status_lock:
+                _model_status[model_id] = "↻"
             self._download_pct = 0.0
 
             try:
@@ -392,13 +384,15 @@ class App:
                 return
 
             self._download_pct = -1.0
-            _model_status[model_id] = "↓"
+            with _model_status_lock:
+                _model_status[model_id] = "↓"
 
         try:
             text, device = transcribe(audio, model_id, SAMPLE_RATE)
             self._model_loaded = True
             self._result = text
-            _model_status[model_id] = "●"
+            with _model_status_lock:
+                _model_status[model_id] = "●"
             if device:
                 self._transcribe_device = device
             total_secs = len(audio) / SAMPLE_RATE
@@ -458,7 +452,7 @@ class App:
             if self._hist.max() >= 0.001:
                 n = len(self._hist)
                 t = min(1.0, self._drain_tick / 72.0)
-                envelope = np.linspace(1.0 - t * 0.96, 1.0 - t * 0.30, n, dtype=np.float32)
+                envelope = np.linspace(1.0 - t * 1.04, 1.0 - t * 0.45, n, dtype=np.float32)
                 self._hist *= np.clip(envelope, 0.0, 1.0)
             self._drain_tick += 1
             if self._hist.max() < 0.001:
@@ -470,7 +464,8 @@ class App:
                 self._proc_tick = 0
                 self._model_loaded = False
                 mid = MODELS[self._active_model_idx][0]
-                self._model_was_cold = _model_status.get(mid) != "●"
+                with _model_status_lock:
+                    self._model_was_cold = _model_status.get(mid) != "●"
                 threading.Thread(
                     target=self._do_transcribe,
                     args=(self._captured, mid),
@@ -509,31 +504,52 @@ class App:
 
         self.scr.erase()
 
+        mid = MODELS[self._active_model_idx][0]
+        with _model_status_lock:
+            status = _model_status.get(mid, "?")
         model_label = (
             f"{MODELS[self._active_model_idx][1]} "
-            f"{_model_status.get(MODELS[self._active_model_idx][0], '?')}"
+            f"{status}"
             f"{(' ' + self._transcribe_device) if self._transcribe_device else ''}"
         )
 
         if self._in_settings:
+            with _model_status_lock:
+                status_copy = dict(_model_status)
             runs = render.compose_settings(
                 w, h, self._settings_items(), self._settings_row, self.theme,
+                models=MODELS, model_status=status_copy,
             )
         else:
-            runs = render.compose(
-                w, h, self.state, self.transcript, self.type_pos, self.err,
-                self.tick, self.spin_i,
-                self._hist.copy() if self.state in ("listening", "draining") else None,
-                self.show_dev, list(self.dev_log), VERSION,
-                model_label, self._wave_ceil, self._done_tick,
-                self.theme,
-                self._clipboard_tick, self.auto_copy,
-                self._hist_idx, len(self._history),
-                self._proc_tick, self._model_was_cold, self._model_loaded,
-                self._download_pct,
-                self._scroll_offset,
-                self._last_word_count, self._last_audio_secs,
+            rs = render.RenderState(
+                w=w, h=h,
+                state=self.state,
+                transcript=self.transcript,
+                type_pos=self.type_pos,
+                err=self.err,
+                tick=self.tick,
+                spin_i=self.spin_i,
+                hist=self._hist.copy() if self.state in ("listening", "draining") else None,
+                show_dev=self.show_dev,
+                dev_log=list(self.dev_log),
+                version=VERSION,
+                model=model_label,
+                wave_ceil=self._wave_ceil,
+                done_tick=self._done_tick,
+                theme=self.theme,
+                clipboard_tick=self._clipboard_tick,
+                auto_copy=self.auto_copy,
+                hist_idx=self._hist_idx,
+                hist_len=len(self._history),
+                proc_tick=self._proc_tick,
+                model_was_cold=self._model_was_cold,
+                model_loaded=self._model_loaded,
+                download_pct=self._download_pct,
+                scroll_offset=self._scroll_offset,
+                word_count=self._last_word_count,
+                audio_secs=self._last_audio_secs,
             )
+            runs = render.compose(rs)
 
         for y, x, text, attr in runs:
             try:
@@ -586,7 +602,6 @@ class App:
                         audio = np.interp(np.linspace(0, len(audio) - 1, new_len),
                                           np.arange(len(audio)), audio).astype(np.float32)
         self._captured = audio
-        self._drain_tick = 999
         self.state = "processing"
         self._result_evt.clear()
         self._cancel_evt.clear()
@@ -609,15 +624,25 @@ class App:
             self.inject_audio(input_path)
         try:
             while True:
-                key = self.scr.getch()
-                if not self.handle_key(key):
-                    break
+                # drain all pending keys so motion-event floods can't bury q/ctrl+c
+                while True:
+                    key = self.scr.getch()
+                    if key == -1:
+                        break
+                    if not self.handle_key(key):
+                        return
                 self.step(); self.draw()
-                if self.state in ("idle", "done") and not self._in_settings:
+                static = (self.state == "done"
+                          and not (self.typewriter and self.type_pos < len(self.transcript))
+                          and self._clipboard_tick == 0)
+                if static and not self._in_settings:
+                    time.sleep(1 / 10)
+                elif self.state in ("idle", "done") and not self._in_settings:
                     time.sleep(1 / 20)
                 else:
                     time.sleep(FRAME_DT)
         finally:
+            curses.mousemask(0)
             self.audio.stop()
 
 
