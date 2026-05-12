@@ -1,3 +1,5 @@
+# the new whisper.py OH YEAHH
+
 import sys
 import io
 import numpy as np
@@ -5,6 +7,26 @@ from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
 _HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
+
+BACKEND_NAME = "mlx" if sys.platform == "darwin" else "faster-whisper"
+
+if sys.platform == "darwin":
+    MODELS = [
+        ("mlx-community/whisper-tiny",           "TINY"),
+        ("mlx-community/whisper-base-mlx",       "BASE"),
+        ("mlx-community/whisper-medium-mlx",     "MEDIUM"),
+        ("mlx-community/whisper-large-v3-turbo", "TURBO"),
+    ]
+    DEFAULT_MODEL_IDX = 3
+else:
+    MODELS = [
+        ("Systran/faster-whisper-tiny",     "TINY"),
+        ("Systran/faster-whisper-base",     "BASE"),
+        ("Systran/faster-whisper-small",    "SMALL"),
+        ("Systran/faster-whisper-medium",   "MEDIUM"),
+        ("Systran/faster-whisper-large-v3", "LARGE"),
+    ]
+    DEFAULT_MODEL_IDX = 0
 
 
 def _hf_snapshot(model_id: str) -> str | None:
@@ -33,9 +55,9 @@ def download_model(model_id: str, progress_cb=None) -> str:
     from huggingface_hub import snapshot_download
     from tqdm.auto import tqdm as _tqdm
 
-    lock        = threading.Lock()
-    file_done   = {}
-    file_total  = {}
+    lock       = threading.Lock()
+    file_done  = {}
+    file_total = {}
 
     class _ProgressTqdm(_tqdm):
         def update(self, n=1):
@@ -44,7 +66,7 @@ def download_model(model_id: str, progress_cb=None) -> str:
                 return
             tid = id(self)
             with lock:
-                file_done[tid]  = file_done.get(tid, 0) + (n or 0)
+                file_done[tid] = file_done.get(tid, 0) + (n or 0)
                 if self.total:
                     file_total[tid] = self.total
                 grand_total = sum(file_total.values())
@@ -52,11 +74,11 @@ def download_model(model_id: str, progress_cb=None) -> str:
             if grand_total > 0:
                 progress_cb(min(0.99, grand_done / grand_total))
 
-    import os, sys as _sys
+    import os
     token = check_token()
 
-    old_stderr = _sys.stderr
-    _sys.stderr = open(os.devnull, "w")
+    old_stderr = sys.stderr
+    sys.stderr = open(os.devnull, "w")
     try:
         path = snapshot_download(
             model_id,
@@ -65,8 +87,8 @@ def download_model(model_id: str, progress_cb=None) -> str:
             tqdm_class=_ProgressTqdm,
         )
     finally:
-        _sys.stderr.close()
-        _sys.stderr = old_stderr
+        sys.stderr.close()
+        sys.stderr = old_stderr
 
     if progress_cb:
         progress_cb(1.0)
@@ -96,26 +118,39 @@ def _transcribe_mlx(audio: np.ndarray, model: str) -> str:
 
 
 _fw_model_cache: dict[str, tuple[object, str]] = {}
+_fw_last_key: str | None = None
 
 
 def _transcribe_faster(audio: np.ndarray, model: str) -> tuple[str, str]:
+    global _fw_last_key
     from faster_whisper import WhisperModel
 
     short = model.split("/")[-1].replace("faster-whisper-", "")
 
     if model not in _fw_model_cache:
+        if _fw_last_key and _fw_last_key != model:
+            _fw_model_cache.pop(_fw_last_key, None)
+
+        sink = io.StringIO()
         try:
-            m = WhisperModel(short, device="cuda", compute_type="float16")
+            with redirect_stdout(sink), redirect_stderr(sink):
+                m = WhisperModel(short, device="cuda", compute_type="float16")
             device = "GPU"
         except Exception:
-            m = WhisperModel(short, device="cpu", compute_type="int8")
+            with redirect_stdout(sink), redirect_stderr(sink):
+                m = WhisperModel(short, device="cpu", compute_type="int8")
             device = "CPU"
         _fw_model_cache[model] = (m, device)
+        _fw_last_key = model
     else:
         m, device = _fw_model_cache[model]
 
-    segments, _ = m.transcribe(audio.astype(np.float32), beam_size=5)
-    return " ".join(s.text for s in segments).strip(), device
+    sink = io.StringIO()
+    with redirect_stdout(sink), redirect_stderr(sink):
+        segments, _ = m.transcribe(audio.astype(np.float32), beam_size=5)
+        text = " ".join(s.text for s in segments).strip()
+
+    return text, device
 
 
 def transcribe(audio: np.ndarray, model: str, sample_rate: int) -> tuple[str, str | None]:

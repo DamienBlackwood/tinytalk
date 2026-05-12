@@ -57,8 +57,21 @@ def _g():
 WAVE_CEIL = 0.12
 
 
+@dataclass
 class Theme:
-    pass
+    dim:       int = 0
+    rail:      int = 0
+    text:      int = 0
+    label:     int = 0
+    on:        int = 0
+    mid:       int = 0
+    soft:      int = 0
+    glass:     int = 0
+    proc:      int = 0
+    proc_soft: int = 0
+    rec:       int = 0
+    done:      int = 0
+    err:       int = 0
 
 
 @dataclass
@@ -90,6 +103,8 @@ class RenderState:
     scroll_offset: int = 0
     word_count: int = 0
     audio_secs: float = 0.0
+    listen_secs: float = 0.0
+    crypto_status: str = ""
 
 
 def wrap(text, width):
@@ -167,7 +182,7 @@ def waveform_done(y, x, w, h, theme):
     return [(y + h // 2, x, g["GLASS_H"] * w, theme.glass)]
 
 
-def waveform_processing(y, x, w, h, theme, tick):
+def waveform_processing(y, x, w, h, theme, tick, proc_tick=0):
     BAR_W, GAP = 2, 1
     stride  = BAR_W + GAP
     n_slots = max(1, w // stride)
@@ -175,6 +190,10 @@ def waveform_processing(y, x, w, h, theme, tick):
     PERIOD = 150
     head   = (tick % PERIOD) / PERIOD * n_slots
     SIGMA  = max(2.0, n_slots / 7.0)
+
+    # cleaned up the transition
+    fade_in = min(1.0, proc_tick / 30.0)
+    fade_in = 1.0 - (1.0 - fade_in) ** 3
 
     levels = np.zeros(n_slots, dtype=np.float32)
     for i in range(n_slots):
@@ -187,7 +206,7 @@ def waveform_processing(y, x, w, h, theme, tick):
         levels[i] = t
 
     recency = np.linspace(0.3, 1.0, n_slots, dtype=np.float32)
-    levels  = levels * recency
+    levels  = levels * recency * fade_in
 
     grid = [[" "] * w for _ in range(h)]
     attr = [[0]   * w for _ in range(h)]
@@ -342,14 +361,14 @@ def _scrollbar(y0, height, total_lines, visible_lines, offset, x, theme):
 
 
 _SETTING_HINTS = {
-    "Default model":      "larger = more accurate, slower",
-    "Auto-copy":  "pretty self-explanatory",
-    "Typewriter": "it looks nice",
-    "Dev panel":  "show timing info & other cool stuff",
+    "Model":      "larger = more accurate, slower",
+    "Auto-copy":  "copy to clipboard automatically when done",
+    "Typewriter": "animate text character by character",
+    "Dev panel":  "show timing info",
 }
 
 
-def compose_settings(w, h, items, selected_row, theme, models=None, model_status=None):
+def compose_settings(w, h, items, selected_row, theme, models=None, model_status=None, crypto_status=""):
     runs = []
     g    = _g()
 
@@ -419,6 +438,13 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
             runs.append((row_y + 1, ix + 1, g["H"] * (iw - 2), theme.dim))
 
     foot_y = box_y + box_h - 2
+
+    if crypto_status:
+        info_y    = foot_y - 1
+        info_attr = theme.done if "active" in crypto_status else theme.dim
+        runs.append((info_y, box_x + _cx(box_w, crypto_status),
+                     crypto_status, info_attr))
+
     runs.append((foot_y, box_x + _cx(box_w, "S or ESC to close"),
                  "S or ESC to close", theme.dim))
 
@@ -475,6 +501,8 @@ def compose(rs: RenderState):
     scroll_offset  = rs.scroll_offset
     word_count     = rs.word_count
     audio_secs     = rs.audio_secs
+    listen_secs    = rs.listen_secs
+    proc_tick      = rs.proc_tick
 
     PAD   = 2
     box_x = PAD
@@ -526,7 +554,7 @@ def compose(rs: RenderState):
         runs.extend(waveform_active(wave_y, wave_x, wave_w, WH, hist, theme, wave_ceil))
         cur_y += WH + 2
     elif state == "processing":
-        runs.extend(waveform_processing(wave_y, wave_x, wave_w, WH, theme, tick))
+        runs.extend(waveform_processing(wave_y, wave_x, wave_w, WH, theme, tick, proc_tick))
         cur_y += WH + 2
     elif state == "done":
         runs.extend(waveform_done(wave_y, wave_x, wave_w, WH, theme))
@@ -594,8 +622,10 @@ def compose(rs: RenderState):
             runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
             cur_y += 1
     elif state == "listening":
-        runs.append((cur_y, box_x + _cx(box_w, "SPACE to stop"),
-                     "SPACE to stop", theme.label))
+        mins, secs = divmod(int(listen_secs), 60)
+        timer = f"{mins}:{secs:02d}"
+        line  = f"SPACE to stop  {g['BULLET']}  {timer}"
+        runs.append((cur_y, box_x + _cx(box_w, line), line, theme.label))
         cur_y += 1
     elif state == "processing":
         proc_attr = theme.proc if (tick % 40) < 28 else theme.proc_soft
@@ -616,14 +646,17 @@ def compose(rs: RenderState):
             sub = "this only happens once"
             runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.dim))
             cur_y += 1
-        elif model_was_cold and not model_loaded:
-            label = "loading model"
-            runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
-            cur_y += 1
         else:
-            label = "transcribing"
+            base    = "loading model" if (model_was_cold and not model_loaded) else "transcribing"
+            audio_s = f"  {g['BULLET']}  {audio_secs:.1f}s" if audio_secs > 0 else ""
+            label   = base + audio_s
             runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
             cur_y += 1
+            if proc_tick > 180:
+                elapsed = proc_tick / 60.0
+                hint    = f"still working  {g['BULLET']}  {elapsed:.0f}s elapsed"
+                runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.dim))
+                cur_y += 1
 
     stat_y = min(cur_y, text_max_y + 1)
     if state == "done" and word_count > 0:
@@ -645,7 +678,7 @@ def compose(rs: RenderState):
 
     kmap = {
         "idle":       [("SPC", "record"), ("m/M", "model"), ("S", "settings"), ("H", "dev"), ("Q", "quit")],
-        "done":       [("SPC", "again"), ("m/M", "model"), ("C", "copy"), ("↑↓", "scroll"), ("[/]", "hist"), ("S", "settings"), ("ESC", "clear")],
+        "done":       [("SPC", "again"), ("A", "append"), ("m/M", "model"), ("C", "copy"), ("↑↓", "scroll"), ("[/]", "hist"), ("S", "settings"), ("ESC", "clear")],
         "listening":  [("SPC", "stop"), ("ESC", "cancel"), ("Q", "quit")],
         "processing": [("SPC", "cancel"), ("ESC", "cancel")],
     }

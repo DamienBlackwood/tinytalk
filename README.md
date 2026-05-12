@@ -40,6 +40,8 @@ In my case, I use Ghostty, so that meant the `xterm-ghostty` terminfo entry mark
 
 And the solution was one line: set the `TERM` variable to `xterm-256color` before curses initialization.
 
+I'll be using the commits and messages in them as notes *for me*, to keep myself accountable.
+
 ## Methodology
 
 All code written and thought out by me, with only **minor** assistance from AI. But mostly drawn from existing research/examples and implemented independently.

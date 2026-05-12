@@ -44,6 +44,6 @@ echo "  medium ~1.5GB   hf download mlx-community/whisper-medium-mlx"
 echo "  turbo  ~1.5GB   hf download mlx-community/whisper-large-v3-turbo"
 echo
 echo "  browse all: https://huggingface.co/mlx-community"
-echo "  for faster downloads, log in first: hf auth login"
+echo "  for faster downloads, please log in first: hf auth login"
 echo
 echo "run: tinytalk"

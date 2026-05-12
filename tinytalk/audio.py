@@ -36,11 +36,7 @@ class AudioCapture:
     def disarm(self):
         self._recording = False
         with self._lock:
-            captured = (
-                np.concatenate(self._chunks)
-                if self._chunks
-                else np.zeros(self.sample_rate // 4, dtype=np.float32)
-            )
+            captured = np.concatenate(self._chunks) if self._chunks else None
             self._chunks.clear()
         self.stop()
         return captured

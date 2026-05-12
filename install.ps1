@@ -31,7 +31,7 @@ python -m venv $Venv
 Write-Host ""
 
 Write-Host "Windows found, installing faster-whisper"
-& $Pip install faster-whisper windows-curses numpy sounddevice scipy huggingface_hub[cli] tqdm -q
+& $Pip install faster-whisper windows-curses numpy sounddevice scipy huggingface_hub[cli] tqdm cryptography -q
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
@@ -52,8 +52,7 @@ Write-Host "  medium ~1.5GB   hf download Systran/faster-whisper-medium"
 Write-Host "  large  ~3GB     hf download Systran/faster-whisper-large-v3"
 Write-Host ""
 Write-Host "  browse all: https://huggingface.co/Systran"
-Write-Host "  have a HuggingFace token? set it first for faster downloads:"
-Write-Host "    hf auth login"
+Write-Host "  for faster downloads, please log in first: hf auth login"
 
 Write-Host ""
 Write-Host "run: & '$Python' tinytalk.py"

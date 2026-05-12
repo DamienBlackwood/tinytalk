@@ -3,28 +3,16 @@ import curses, json, threading, time, collections, subprocess, sys, numpy as np
 from pathlib import Path
 from . import render
 from .audio import AudioCapture, SAMPLE_RATE
-from .whisper import transcribe, is_model_cached, check_token, download_model
+from .backend import (
+    transcribe, is_model_cached, check_token, download_model,
+    MODELS, DEFAULT_MODEL_IDX, BACKEND_NAME,
+)
+from . import transcripts as transcript_log
+from . import crypto as crypto_mod
 
 VERSION  = "v0.2"
 FRAME_DT = 1 / 60
 TYPE_DT  = 0.016
-
-if sys.platform == "darwin":
-    MODELS = [
-        ("mlx-community/whisper-tiny",           "TINY"),
-        ("mlx-community/whisper-base-mlx",       "BASE"),
-        ("mlx-community/whisper-medium-mlx",     "MEDIUM"),
-        ("mlx-community/whisper-large-v3-turbo", "TURBO"),
-    ]
-else:
-    MODELS = [
-        ("Systran/faster-whisper-tiny",     "TINY"),
-        ("Systran/faster-whisper-base",     "BASE"),
-        ("Systran/faster-whisper-small",    "SMALL"),
-        ("Systran/faster-whisper-medium",   "MEDIUM"),
-        ("Systran/faster-whisper-large-v3", "LARGE"),
-    ]
-DEFAULT_MODEL_IDX = 0 if sys.platform != "darwin" else 3
 
 _model_status: dict[str, str] = {}
 _model_status_lock = threading.Lock()
@@ -101,21 +89,100 @@ def _build_theme():
             curses.init_pair(idx, fg, -1)
         except curses.error:
             curses.init_pair(idx, fg, curses.COLOR_BLACK)
-    t = render.Theme()
-    t.dim       = curses.color_pair(1)
-    t.rail      = curses.color_pair(2)
-    t.text      = curses.color_pair(3) | curses.A_BOLD
-    t.label     = curses.color_pair(4)
-    t.on        = curses.color_pair(5) | curses.A_BOLD
-    t.mid       = curses.color_pair(6)
-    t.soft      = curses.color_pair(12)
-    t.glass     = curses.color_pair(7)
-    t.proc      = curses.color_pair(8) | curses.A_BOLD
-    t.proc_soft = curses.color_pair(13)
-    t.rec       = curses.color_pair(9) | curses.A_BOLD
-    t.done      = curses.color_pair(10) | curses.A_BOLD
-    t.err       = curses.color_pair(11)
-    return t
+    return render.Theme(
+        dim       = curses.color_pair(1),
+        rail      = curses.color_pair(2),
+        text      = curses.color_pair(3) | curses.A_BOLD,
+        label     = curses.color_pair(4),
+        on        = curses.color_pair(5) | curses.A_BOLD,
+        mid       = curses.color_pair(6),
+        soft      = curses.color_pair(12),
+        glass     = curses.color_pair(7),
+        proc      = curses.color_pair(8) | curses.A_BOLD,
+        proc_soft = curses.color_pair(13),
+        rec       = curses.color_pair(9) | curses.A_BOLD,
+        done      = curses.color_pair(10) | curses.A_BOLD,
+        err       = curses.color_pair(11),
+    )
+
+
+class TranscriptionJob:
+    def __init__(self, audio, model_id, mock=False):
+        self.audio    = audio
+        self.model_id = model_id
+        self.mock     = mock
+
+        self.result: str | Exception | None = None
+        self.device: str | None = None
+        self.download_pct  = -1.0
+        self.model_was_cold = False
+        self.model_loaded   = False
+
+        self._done   = threading.Event()
+        self._cancel = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def cancel(self):
+        self._cancel.set()
+
+    def is_done(self):
+        return self._done.is_set()
+
+    def is_cancelled(self):
+        return self._cancel.is_set()
+
+    def _run(self):
+        if self._cancel.is_set():
+            return
+
+        if self.mock:
+            time.sleep(0.3)
+            self.result = _MOCK_TEXT
+            self.model_loaded = True
+            self._done.set()
+            return
+
+        t0 = time.perf_counter()
+
+        if not is_model_cached(self.model_id):
+            token = check_token()
+            if not token:
+                self.result = RuntimeError(
+                    "model not downloaded  -  run: hf auth login  then try again"
+                )
+                self._done.set()
+                return
+
+            with _model_status_lock:
+                _model_status[self.model_id] = "↻"
+            self.download_pct = 0.0
+
+            try:
+                download_model(self.model_id,
+                               progress_cb=lambda pct: setattr(self, "download_pct", pct))
+            except Exception as e:
+                self.download_pct = -1.0
+                self.result = RuntimeError(f"download failed: {e}")
+                self._done.set()
+                return
+
+            self.download_pct = -1.0
+            with _model_status_lock:
+                _model_status[self.model_id] = "↓"
+
+        try:
+            text, device = transcribe(self.audio, self.model_id, SAMPLE_RATE)
+            self.model_loaded = True
+            self.result = text
+            self.device = device
+            with _model_status_lock:
+                _model_status[self.model_id] = "●"
+        except Exception as e:
+            self.result = e
+
+        self._done.set()
 
 
 class App:
@@ -134,7 +201,7 @@ class App:
         self.model_idx  = cfg.get("model_idx", DEFAULT_MODEL_IDX)
         if not (0 <= self.model_idx < len(MODELS)):
             self.model_idx = DEFAULT_MODEL_IDX
-        self._active_model_idx = self.model_idx   # session
+        self._active_model_idx = self.model_idx
         self.show_dev  = cfg.get("show_dev",   False)
         self.auto_copy = cfg.get("auto_copy",  False)
         self.typewriter = cfg.get("typewriter", True)
@@ -143,20 +210,19 @@ class App:
         self._smoothed = 0.0
         self._wave_ceil = render.WAVE_CEIL * 0.24
         self.dev_log = collections.deque(maxlen=6)
-        self._result_evt = threading.Event()
-        self._cancel_evt = threading.Event()
-        self._result = None
+        self._job: TranscriptionJob | None = None
         self._captured = None
         self._drain_tick = 0
         self._done_tick  = 0
         self._clipboard_tick = 0
-        self._history = collections.deque(maxlen=5)
+        self._history = collections.deque(
+            transcript_log.load_recent(5), maxlen=5
+        )
         self._hist_idx = -1
         self._hist_current = ""
+        self._append_prefix = ""
+        self._listen_start = 0.0
         self._proc_tick = 0
-        self._model_was_cold = False
-        self._model_loaded = False
-        self._download_pct = -1.0   # -1 set as not downloading by default
         self._transcribe_device = None
         self._scroll_offset = 0
         self._last_word_count = 0
@@ -172,6 +238,13 @@ class App:
                 threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
         self.theme = None
 
+    def _start_job(self, audio, model_id):
+        self._job = TranscriptionJob(audio, model_id, mock=self._mock)
+        mid = MODELS[self._active_model_idx][0]
+        with _model_status_lock:
+            self._job.model_was_cold = _model_status.get(mid) != "●"
+        self._job.start()
+
     def handle_key(self, key):
         if self._in_settings:
             return self._handle_settings_key(key)
@@ -180,17 +253,18 @@ class App:
             return False
         if key == 27:
             if self.state == "processing":
-                self._cancel_evt.set(); self.state = "idle"; self.scr.clear()
+                if self._job:
+                    self._job.cancel()
+                self.state = "idle"; self.scr.clear()
                 return True
             if self.state == "done":
                 self.transcript = ""; self.err = ""; self.type_pos = 0
                 self._hist_idx = -1; self._scroll_offset = 0
+                self._append_prefix = ""
                 self.state = "idle"; self.scr.clear()
             elif self.state == "listening":
                 self.audio.disarm(); self.state = "idle"
                 self._hist[:] = 0.0; self._peak[:] = 0.0; self.scr.clear()
-            return True
-        if key == curses.KEY_MOUSE:
             return True
         if key == curses.KEY_RESIZE:
             self._scroll_offset = 0
@@ -208,6 +282,10 @@ class App:
                 d = -1 if key == ord('M') else 1
                 self._active_model_idx = (self._active_model_idx + d) % len(MODELS)
                 self._probe_active_model()
+        elif key in (ord('a'), ord('A')):
+            if self.state == "done" and self.transcript:
+                self._append_prefix = self.transcript
+                self._toggle()
         elif key in (ord('c'), ord('C')):
             if self.state == "done" and self.transcript:
                 self._do_copy()
@@ -220,7 +298,6 @@ class App:
                 tx_w = min(72, w - 10)
                 total = len(render.wrap(self.transcript, tx_w))
                 self._scroll_offset = min(self._scroll_offset + 1, max(0, total - 1))
-
         elif key == ord('['):
             if self.state == "done" and self._history:
                 if self._hist_idx == -1:
@@ -239,16 +316,16 @@ class App:
                 self._scroll_offset = 0
         elif key == ord(' '):
             if self.state == "processing":
-                self._cancel_evt.set(); self.state = "idle"; self.scr.clear()
+                if self._job:
+                    self._job.cancel()
+                self.state = "idle"; self.scr.clear()
                 return True
             self._toggle()
         return True
 
     def _handle_settings_key(self, key):
         settings = self._settings_items()
-        if key == curses.KEY_MOUSE:
-            return True
-        if key in (27, ord('s'), ord('S')):
+        if key in (27, ord('s'), ord('S'), ord('q'), ord('Q')):
             self._in_settings = False
             self.scr.clear()
         elif key == curses.KEY_UP:
@@ -261,8 +338,6 @@ class App:
             self._settings_adjust(self._settings_row, -1)
         elif key == curses.KEY_RIGHT:
             self._settings_adjust(self._settings_row, +1)
-        elif key in (ord('q'), ord('Q')):
-            return False
         return True
 
     def _settings_items(self):
@@ -322,8 +397,7 @@ class App:
         with _model_status_lock:
             if _model_status.get(mid) not in ("↓", "●"):
                 _model_status[mid] = "?"
-                t = threading.Thread(target=_probe_model_status, args=(mid,), daemon=True)
-                t.start()
+                threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
 
     def _do_copy(self):
         try:
@@ -340,90 +414,64 @@ class App:
 
     def _toggle(self):
         if self.state in ("idle", "done"):
+            if self.state == "idle":
+                self._append_prefix = ""
             self.state = "listening"
             self.transcript = ""; self.err = ""; self.type_pos = 0
             self._hist_idx = -1; self._scroll_offset = 0
             self._peak[:] = 0.0; self._hist[:] = 0.0; self._smoothed = 0.0
             self._wave_ceil = render.WAVE_CEIL * 0.24
+            self._listen_start = time.perf_counter()
             self.audio.arm()
         elif self.state == "listening":
-            self._captured   = self.audio.disarm()
+            captured = self.audio.disarm()
+            if captured is None:
+                self.state = "idle"
+                return
+            self._captured   = captured
             self._drain_tick = 0
             self.state       = "draining"
-
-    def _do_transcribe(self, audio, model_id):
-        if self._cancel_evt.is_set():
-            self._cancel_evt.clear(); return
-        if self._mock:
-            time.sleep(0.3)
-            self._result = _MOCK_TEXT
-            self._model_loaded = True
-            self._result_evt.set()
-            return
-        t0 = time.perf_counter()
-
-        if not is_model_cached(model_id):
-            token = check_token()
-            if not token:
-                self._result = RuntimeError(
-                    "model not downloaded  -  run: hf auth login  then try again"
-                )
-                self._result_evt.set()
-                return
-
-            with _model_status_lock:
-                _model_status[model_id] = "↻"
-            self._download_pct = 0.0
-
-            try:
-                download_model(model_id, progress_cb=lambda pct: setattr(self, "_download_pct", pct))
-            except Exception as e:
-                self._download_pct = -1.0
-                self._result = RuntimeError(f"download failed: {e}")
-                self._result_evt.set()
-                return
-
-            self._download_pct = -1.0
-            with _model_status_lock:
-                _model_status[model_id] = "↓"
-
-        try:
-            text, device = transcribe(audio, model_id, SAMPLE_RATE)
-            self._model_loaded = True
-            self._result = text
-            with _model_status_lock:
-                _model_status[model_id] = "●"
-            if device:
-                self._transcribe_device = device
-            total_secs = len(audio) / SAMPLE_RATE
-            elapsed    = time.perf_counter() - t0
-            words      = len(text.split()) if text.strip() else 0
-            ratio      = total_secs / elapsed if elapsed > 0 else 0
-            label      = MODELS[self._active_model_idx][1]
-
-            self._last_word_count = words
-            self._last_audio_secs = total_secs
-            self.dev_log.append(f"{total_secs:.1f}s audio  ->  {elapsed:.1f}s  ({ratio:.1f}x)")
-            self.dev_log.append(f"{words} words  .  {label}")
-        except Exception as e:
-            self._result = e
-            self.dev_log.append(f"err: {e}")
-        self._result_evt.set()
 
     def step(self):
         self.tick += 1
 
-        if self.state == "processing" and self._cancel_evt.is_set():
-            self._cancel_evt.clear(); self.state = "idle"
+        if self.state == "processing" and self._job and self._job.is_cancelled():
+            self._job = None
+            self.state = "idle"
             self._hist[:] = 0.0; self._peak[:] = 0.0
             return
 
-        if self.state == "processing" and self._result_evt.is_set():
-            res = self._result
+        if self.state == "processing" and self._job and self._job.is_done():
+            job = self._job
+            self._job = None
+            res = job.result
+            if job.device:
+                self._transcribe_device = job.device
+
             if isinstance(res, Exception):
                 self.err = str(res); self.transcript = ""
+                self.dev_log.append(f"err: {res}")
             else:
-                self.transcript = res or ""
+                new_text   = (res or "").strip()
+                total_secs = len(job.audio) / SAMPLE_RATE
+                words      = len(new_text.split()) if new_text else 0
+                label      = MODELS[self._active_model_idx][1]
+                self._last_word_count = words
+                self._last_audio_secs = total_secs
+                self.dev_log.append(f"{total_secs:.1f}s audio · {label}")
+                self.dev_log.append(f"{words} words")
+
+                if self._append_prefix and new_text:
+                    self.transcript = self._append_prefix + " " + new_text
+                else:
+                    self.transcript = new_text
+                self._append_prefix = ""
+
+                if new_text:
+                    transcript_log.save(
+                        self.transcript, label, total_secs, words
+                    )
+
             self.state      = "done"
             self.type_pos   = 0 if self.typewriter else len(self.transcript)
             self.type_start = time.perf_counter()
@@ -458,19 +506,9 @@ class App:
             if self._hist.max() < 0.001:
                 self._hist[:] = 0.0
                 self.state = "processing"
-                self._result_evt.clear()
-                self._cancel_evt.clear()
-                self._result = None
                 self._proc_tick = 0
-                self._model_loaded = False
                 mid = MODELS[self._active_model_idx][0]
-                with _model_status_lock:
-                    self._model_was_cold = _model_status.get(mid) != "●"
-                threading.Thread(
-                    target=self._do_transcribe,
-                    args=(self._captured, mid),
-                    daemon=True,
-                ).start()
+                self._start_job(self._captured, mid)
 
         if self.state == "listening":
             raw = self.audio.current_rms()
@@ -488,7 +526,6 @@ class App:
             normed_new = min(1.0, (self._smoothed / max(1e-6, self._wave_ceil)) ** 0.65)
             self._peak[-1] = max(self._peak[-1], normed_new)
             self._peak = np.maximum(0.0, self._peak - PEAK_DECAY)
-
 
     def draw(self):
         h, w = self.scr.getmaxyx()
@@ -513,14 +550,31 @@ class App:
             f"{(' ' + self._transcribe_device) if self._transcribe_device else ''}"
         )
 
+        job = self._job
+
         if self._in_settings:
             with _model_status_lock:
                 status_copy = dict(_model_status)
+            crypto_status = (
+                f"transcripts encrypted  {render._g()['BULLET']}  {crypto_mod.ENVELOPE_VERSION}"
+                if crypto_mod.available()
+                else "encryption unavailable  -  pip install cryptography"
+            )
             runs = render.compose_settings(
                 w, h, self._settings_items(), self._settings_row, self.theme,
                 models=MODELS, model_status=status_copy,
+                crypto_status=crypto_status,
             )
         else:
+            if self.state == "processing" and self._captured is not None:
+                live_audio_secs = len(self._captured) / SAMPLE_RATE
+            else:
+                live_audio_secs = self._last_audio_secs
+            live_listen_secs = (
+                time.perf_counter() - self._listen_start
+                if self.state == "listening" and self._listen_start
+                else 0.0
+            )
             rs = render.RenderState(
                 w=w, h=h,
                 state=self.state,
@@ -542,12 +596,13 @@ class App:
                 hist_idx=self._hist_idx,
                 hist_len=len(self._history),
                 proc_tick=self._proc_tick,
-                model_was_cold=self._model_was_cold,
-                model_loaded=self._model_loaded,
-                download_pct=self._download_pct,
+                model_was_cold=job.model_was_cold if job else False,
+                model_loaded=job.model_loaded if job else False,
+                download_pct=job.download_pct if job else -1.0,
                 scroll_offset=self._scroll_offset,
                 word_count=self._last_word_count,
-                audio_secs=self._last_audio_secs,
+                audio_secs=live_audio_secs,
+                listen_secs=live_listen_secs,
             )
             runs = render.compose(rs)
 
@@ -601,16 +656,12 @@ class App:
                         new_len = int(len(audio) * SAMPLE_RATE / sr)
                         audio = np.interp(np.linspace(0, len(audio) - 1, new_len),
                                           np.arange(len(audio)), audio).astype(np.float32)
+
         self._captured = audio
         self.state = "processing"
-        self._result_evt.clear()
-        self._cancel_evt.clear()
-        self._result = None
         self._proc_tick = 0
-        self._model_loaded = False
         mid = MODELS[self._active_model_idx][0]
-        self._model_was_cold = _model_status.get(mid) != "●"
-        threading.Thread(target=self._do_transcribe, args=(audio, mid), daemon=True).start()
+        self._start_job(audio, mid)
 
     def run(self, input_path: str | None = None):
         curses.curs_set(0); self.scr.nodelay(1); self.scr.keypad(1)
@@ -618,13 +669,10 @@ class App:
             raise SystemExit("tinytalk requires a colour terminal")
         curses.start_color(); curses.use_default_colors()
         self.theme = _build_theme()
-        curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
-        curses.mouseinterval(0)
         if input_path:
             self.inject_audio(input_path)
         try:
             while True:
-                # drain all pending keys so motion-event floods can't bury q/ctrl+c
                 while True:
                     key = self.scr.getch()
                     if key == -1:
@@ -642,7 +690,6 @@ class App:
                 else:
                     time.sleep(FRAME_DT)
         finally:
-            curses.mousemask(0)
             self.audio.stop()
 
 
