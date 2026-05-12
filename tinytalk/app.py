@@ -1,6 +1,8 @@
 import curses, json, threading, time, collections, subprocess, sys, numpy as np
 
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Any
 from . import render
 from .audio import AudioCapture, SAMPLE_RATE
 from .backend import (
@@ -9,6 +11,16 @@ from .backend import (
 )
 from . import transcripts as transcript_log
 from . import crypto as crypto_mod
+
+# forgot to convert this into a dataclass from the last one
+
+@dataclass
+class Setting:
+    label: str
+    kind: str
+    getter: Callable[[], Any]
+    apply: Callable[[int], None]
+    options: list[str] | None = None
 
 VERSION  = "v0.2"
 FRAME_DT = 1 / 60
@@ -341,49 +353,48 @@ class App:
         return True
 
     def _settings_items(self):
+        def cycle_model(delta):
+            if delta == 0:
+                delta = 1
+            if self.state in ("listening", "processing", "draining"):
+                return
+            self.model_idx = (self.model_idx + delta) % len(MODELS)
+            self._active_model_idx = self.model_idx
+            _save_state(self)
+            self._probe_current_model()
+
+        def toggle_auto_copy(_):
+            self.auto_copy = not self.auto_copy
+            _save_state(self)
+
+        def toggle_typewriter(_):
+            self.typewriter = not self.typewriter
+            if not self.typewriter and self.state == "done":
+                self.type_pos = len(self.transcript)
+            _save_state(self)
+
+        def toggle_dev(_):
+            self.show_dev = not self.show_dev
+            self.scr.clear()
+            _save_state(self)
+
         return [
-            ("Model",       "cycle",  lambda: MODELS[self.model_idx][1],
-                            [m[1] for m in MODELS]),
-            ("Auto-copy",   "toggle", lambda: self.auto_copy,   None),
-            ("Typewriter",  "toggle", lambda: self.typewriter,  None),
-            ("Dev panel",   "toggle", lambda: self.show_dev,    None),
+            Setting("Model",      "cycle",  lambda: MODELS[self.model_idx][1],
+                    cycle_model, [m[1] for m in MODELS]),
+            Setting("Auto-copy",  "toggle", lambda: self.auto_copy,   toggle_auto_copy),
+            Setting("Typewriter", "toggle", lambda: self.typewriter,  toggle_typewriter),
+            Setting("Dev panel",  "toggle", lambda: self.show_dev,    toggle_dev),
         ]
 
     def _settings_activate(self, row):
         items = self._settings_items()
-        if row >= len(items):
-            return
-        label, kind, getter, options = items[row]
-        if kind == "toggle":
-            self._settings_set_toggle(label)
-        elif kind == "cycle":
-            self._settings_adjust(row, +1)
+        if 0 <= row < len(items):
+            items[row].apply(0)
 
     def _settings_adjust(self, row, delta):
         items = self._settings_items()
-        if row >= len(items):
-            return
-        label, kind, getter, options = items[row]
-        if kind == "toggle":
-            self._settings_set_toggle(label)
-        elif kind == "cycle" and options:
-            if label == "Model" and self.state not in ("listening", "processing", "draining"):
-                self.model_idx = (self.model_idx + delta) % len(MODELS)
-                self._active_model_idx = self.model_idx
-                _save_state(self)
-                self._probe_current_model()
-
-    def _settings_set_toggle(self, label):
-        if label == "Auto-copy":
-            self.auto_copy = not self.auto_copy
-        elif label == "Typewriter":
-            self.typewriter = not self.typewriter
-            if not self.typewriter and self.state == "done":
-                self.type_pos = len(self.transcript)
-        elif label == "Dev panel":
-            self.show_dev = not self.show_dev
-            self.scr.clear()
-        _save_state(self)
+        if 0 <= row < len(items):
+            items[row].apply(delta)
 
     def _probe_current_model(self):
         mid = MODELS[self.model_idx][0]
@@ -665,6 +676,10 @@ class App:
 
     def run(self, input_path: str | None = None):
         curses.curs_set(0); self.scr.nodelay(1); self.scr.keypad(1)
+        try:
+            curses.set_escdelay(50)  # i forgot to change this lol it was 1 second long before
+        except (AttributeError, curses.error):
+            pass # i added this because windows-curses and older versions don't support it (to my knowledge)
         if not curses.has_colors():
             raise SystemExit("tinytalk requires a colour terminal")
         curses.start_color(); curses.use_default_colors()
@@ -692,6 +707,8 @@ class App:
         finally:
             self.audio.stop()
 
+
+# i need to find a better way to deal with this massive chunk of text
 
 _MOCK_TEXT = (
     "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis finibus enim a sagittis fringilla. "

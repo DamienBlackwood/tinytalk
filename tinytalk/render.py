@@ -394,7 +394,8 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
     inner_w = iw - 2
     ctrl_w  = 16
 
-    for i, (label, kind, getter, options) in enumerate(items):
+    for i, item in enumerate(items):
+        label, kind, getter, options = item.label, item.kind, item.getter, item.options
         row_y    = cur_y + i * 2
         is_sel   = i == selected_row
         lbl_attr = theme.text  if is_sel else theme.label
@@ -647,9 +648,13 @@ def compose(rs: RenderState):
             runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.dim))
             cur_y += 1
         else:
-            base    = "loading model" if (model_was_cold and not model_loaded) else "transcribing"
-            audio_s = f"  {g['BULLET']}  {audio_secs:.1f}s" if audio_secs > 0 else ""
-            label   = base + audio_s
+            base = "loading model" if (model_was_cold and not model_loaded) else "transcribing"
+            if audio_secs > 0:
+                unit    = "second" if 0.95 <= audio_secs < 1.05 else "seconds"
+                audio_s = f"  {g['BULLET']}  {audio_secs:.1f} {unit} long"
+            else:
+                audio_s = ""
+            label = base + audio_s
             runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
             cur_y += 1
             if proc_tick > 180:

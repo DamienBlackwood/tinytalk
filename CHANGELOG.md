@@ -2,8 +2,9 @@
 
 ## v0.2.0
 
-- Clipboard: `c` copies transcript. `a` toggles autocopy (both are persistent)
-- History: `↑` / `↓` in done state steps through last 5 transcripts.
+- Clipboard: `c` copies transcript. Auto-copy toggle lives in settings (`s`).
+- History: `[` / `]` in done state steps through last 5 transcripts.
+- Scroll: `↑` / `↓` scrolls long transcripts in done state.
 - Dev log now shows timing, realtime ratio, word count, and model used per transcription.
 - Cold model load shows "loading model" instead of "transcribing" on first use (I plan to make it more robust later).
 - Fixed: bare `except` in `_save_cfg` narrowed to `OSError`.
