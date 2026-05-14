@@ -28,7 +28,7 @@ I wanted something quick and keyboard driven to make audio transcription without
 
 I plan to upload this to PyPI once it is more polished and ready.
 
-## Under the hood (reflections for me)
+## Under the hood
 
 It took a few weeks of on-and-off work for the first version, with some genuine problems involved.
 
@@ -37,8 +37,6 @@ One annoying issue was rendering the waveform graphically; it recomputed the ent
 Another nasty bug involved Ghostty; for reasons unknown to me, the box-drawing character (like `┌─┐│└┘`) were drawn incorrectly despite font support.
 
 In my case, I use Ghostty, so that meant the `xterm-ghostty` terminfo entry marked them as double-width, which is incorrect. curses uses terminfo to compute new cursor positions, so each `─` character advanced the cursor two columns rather than one. This screwed up all further character drawing.
-
-And the solution was one line: set the `TERM` variable to `xterm-256color` before curses initialization.
 
 I'll be using the commits and messages in them as notes *for me*, to keep myself accountable.
 

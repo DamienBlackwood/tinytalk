@@ -22,7 +22,7 @@ class Setting:
     apply: Callable[[int], None]
     options: list[str] | None = None
 
-VERSION  = "v0.2"
+VERSION  = "v0.3"
 FRAME_DT = 1 / 60
 TYPE_DT  = 0.016
 

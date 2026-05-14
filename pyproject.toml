@@ -1,6 +1,6 @@
 [project]
 name = "tinytalk"
-version = "0.2.0"
+version = "0.3.0"
 description = "Push-to-talk terminal transcription, powered by Whisper. macOS uses MLX, Windows/Linux use faster-whisper."
 requires-python = ">=3.11"
 dependencies = [

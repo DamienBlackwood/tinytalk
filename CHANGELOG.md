@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.0
+
+- Encrypted transcripts: every transcription is logged to `.tinytalk/transcripts.jsonl` and the text is encrypted with AES-256-GCM. Key sits at `.tinytalk/key`. Metadata (timestamp, model, duration, word count) stays in the clear.
+- Unified backend: `whisper.py` became `backend.py` — one module hides the MLX vs faster-whisper split, including the model list and platform check.
+- Faster-whisper LRU: switching models no longer keeps every loaded model resident in memory.
+- Faster-whisper stdout/stderr is now suppressed so first-load chatter doesn't smear the curses UI.
+- ESC latency: `set_escdelay(25)` knocks ~975ms off the lag between pressing ESC and the UI clearing.
+- Processing screen now reads "2.3 seconds long" instead of "2.3s" while transcribing.
+- Refactor: `App.draw` takes a `RenderState` dataclass instead of 23 positional args.
+- Refactor: the transcription thread, cancel/done events, and progress state are pulled into a `TranscriptionJob` class.
+- Refactor: settings are a `Setting` dataclass with per-row `apply(delta)` instead of three label-dispatch methods.
+- Fixed: toggling any UI setting no longer wipes the manually-set `ascii` key in `config.json`.
+- Fixed: docs (`MANUAL.md`, `CHANGELOG.md`) now match the keybindings the code actually has.
+- Fixed: `pyproject.toml` declares the runtime deps the app needs (`huggingface_hub[cli]`, `tqdm`, `mlx-whisper`, `faster-whisper`, `windows-curses`, `cryptography`).
+- Fixed: dead `_drain_tick = 999` removed from `inject_audio`.
+- `Theme` is a `@dataclass` instead of a bag-of-attributes.
+
 ## v0.2.0
 
 - Clipboard: `c` copies transcript. Auto-copy toggle lives in settings (`s`).
