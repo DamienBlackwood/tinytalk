@@ -393,7 +393,7 @@ def _draw_bars(grid, attr, h, levels, recency, theme, processing=False, caps=Non
 
         # peak hold. I need to tweak this more
         if caps is not None:
-            cap_cells = int(float(caps[i]) * max(1, cx - 1) * steps // steps)
+            cap_cells = int(float(caps[i]) * max(1, cx - 1))
             if cap_cells > full_cells:
                 for row, ch in ((cx - cap_cells, g["CAP_T"]), (cx + cap_cells, g["CAP_B"])):
                     if 0 <= row < h and grid[row][col0] == " ":

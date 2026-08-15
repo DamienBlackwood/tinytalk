@@ -69,7 +69,7 @@ The release to make things stop being finnicky
 - One version number instead of three, two of which were wrong.
 - Clipboard falls back through `wl-copy`, `xclip`, `xsel` on Linux, and says so when it finds none.
 - Tests: `python -m unittest discover tests`. They found the clipping and 60x18 bugs above.
-- I removed dead code: the unused peak-hold buffer, three identical waveform functions, unused imports and args.
+- I removed dead code: three identical waveform functions, unused imports and args.
 - The lorem ipsum wall in `app.py` is one paragraph repeated instead of forty lines of literal.
 
 ## v0.3.0
