@@ -150,6 +150,24 @@ def _build_theme():
     )
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    if sys.platform == "darwin":
+        tools = [["pbcopy"]]
+    elif sys.platform == "win32":
+        tools = [["clip"]]
+    else:
+        tools = [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "-ib"]]
+    for cmd in tools:
+        try:
+            proc = subprocess.run(cmd, input=text.encode(),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            continue
+        if proc.returncode == 0:
+            return True
+    return False
+
+
 class TranscriptionJob:
     def __init__(self, audio, model, mock=False):
         self.audio = audio
@@ -228,6 +246,7 @@ class App:
         self.state = "idle"
         self.transcript = ""
         self.err = ""
+        self.notice = ""
         self.type_pos = 0
         self.type_start = 0.0
         self.spin_i = 0
@@ -251,6 +270,7 @@ class App:
         self._drain_tick = 0
         self._done_tick  = 0
         self._clipboard_tick = 0
+        self._notice_tick = 0
         self._history = collections.deque(
             transcript_log.load_recent(5), maxlen=5
         )
@@ -310,6 +330,10 @@ class App:
         elif key in (ord('h'), ord('H')):
             self.show_dev = not self.show_dev
             _save_state(self)
+            if self.show_dev:
+                h, w = self.scr.getmaxyx()
+                if not render.dev_fits(w, h):
+                    self._flash("dev panel needs a taller window")
             self.scr.clear()
         elif key in (ord('m'), ord('M')):
             if self.state not in ("listening", "processing", "draining"):
@@ -405,18 +429,15 @@ class App:
             Setting("Dev panel",  "toggle", lambda: self.show_dev,   toggle_dev),
         ]
 
+    def _flash(self, message, frames=90):
+        self.notice = message
+        self._notice_tick = frames
+
     def _do_copy(self):
-        try:
-            if sys.platform == "darwin":
-                subprocess.run(["pbcopy"], input=self.transcript.encode(), check=False)
-            elif sys.platform == "win32":
-                subprocess.run(["clip"], input=self.transcript.encode(), check=False)
-            else:
-                subprocess.run(["xclip", "-selection", "clipboard"],
-                               input=self.transcript.encode(), check=False)
+        if _copy_to_clipboard(self.transcript):
             self._clipboard_tick = 45
-        except OSError:
-            pass
+        else:
+            self._flash("no clipboard tool found")
 
     def _finish_early(self, message):
         """Bail out of a recording without waking the model up."""
@@ -458,6 +479,11 @@ class App:
 
     def step(self):
         self.tick += 1
+
+        if self._notice_tick > 0:
+            self._notice_tick -= 1
+            if self._notice_tick == 0:
+                self.notice = ""
 
         if self.state == "processing" and self._job and self._job.is_cancelled():
             self._job = None
@@ -656,6 +682,7 @@ class App:
                 word_count=self._last_word_count,
                 audio_secs=live_audio_secs,
                 listen_secs=live_listen_secs,
+                notice=self.notice,
             )
             runs = render.compose(rs)
 

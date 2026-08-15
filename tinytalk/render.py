@@ -217,7 +217,7 @@ class RenderState:
     word_count: int = 0
     audio_secs: float = 0.0
     listen_secs: float = 0.0
-    crypto_status: str = ""
+    notice: str = ""
 
 
 def wrap(text, width):
@@ -764,11 +764,10 @@ def compose(rs: RenderState):
         stat_attr = theme.dim if done_tick > 40 else theme.soft
         runs.append((stat_y, box_x + _cx(box_w, stat), stat, stat_attr))
 
-    if state == "done" and clipboard_tick > 0:
-        cb_attr = theme.done if clipboard_tick > 22 else theme.mid
-        cb_y    = stat_y + 1
-        if cb_y < foot_y:
-            runs.append((cb_y, box_x + _cx(box_w, "copied"), "copied", cb_attr))
+    notice = "copied" if clipboard_tick > 0 else rs.notice
+    if notice and stat_y + 1 < foot_y:
+        attr = theme.done if clipboard_tick > 22 else theme.mid
+        runs.append((stat_y + 1, box_x + _cx(box_w, notice), notice, attr))
 
     if show_dev:
         # this used to be anchored to the bottom rail, so the last two lines of it landed on the keybinds and the rail
