@@ -721,7 +721,8 @@ def compose(rs: RenderState):
         runs.append((cur_y, box_x + _cx(box_w, notice), notice, attr))
 
     if show_dev:
-        # this used to be anchored to the bottom rail, so the last two lines of it landed on the keybinds and the rail
+        # this used to be anchored to the bottom rail, so its last two lines
+        # landed on the keybinds and the rail
         rows = (list(rs.dev_rows) + [("", "")] * DEV_ROWS)[:DEV_ROWS]
         dy   = foot_y - DEV_ROWS - 2
         rule = f"{g['H']}{g['H']} DEV " + g["H"] * max(0, iw - 9)

@@ -44,7 +44,8 @@ def _load_or_create_key() -> bytes | None:
             return None
         key = secrets.token_bytes(_KEY_BYTES)
 
-        # write to .tmp then rename, so a crash mid-write can't leave a half-key behind that silently locks you out of every transcript
+        # write to .tmp then rename. a crash mid-write would otherwise leave a
+        # half-key behind that silently locks you out of every transcript
         tmp = key_path.with_name(key_path.name + ".tmp")
         tmp.write_bytes(key)
         try:

@@ -528,7 +528,8 @@ class App:
                 span = min(TYPE_MAX, max(TYPE_MIN, n * TYPE_DT))
                 done = (time.perf_counter() - self.type_start) / span
                 self.type_pos = min(n, int(n * done))
-                # follow the cursor, otherwise a long transcript types itself straight out the bottom of the viewport
+                # follow the cursor, or a long transcript types itself straight
+                # out the bottom of the viewport
                 self._scroll_offset = self._max_scroll(self.transcript[:self.type_pos])
 
         if self.state in ("processing", "draining"):
@@ -873,7 +874,8 @@ def main():
     except locale.Error:
         pass
 
-    # ghostty's terminfo calls box-drawing characters double width, which walks the cursor two columns for every one it should
+    # ghostty's terminfo calls box-drawing characters double width, which walks
+    # the cursor two columns for every one it should
     if os.environ.get("TERM") == "xterm-ghostty":
         os.environ["TERM"] = "xterm-256color"
 

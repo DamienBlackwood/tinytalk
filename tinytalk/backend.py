@@ -11,7 +11,8 @@ import numpy as np
 
 BACKEND_NAME = "mlx" if sys.platform == "darwin" else "faster-whisper"
 
-# before it could say that it was downloaded, but now I made it check if the weights are actually present
+# before it could say a model was downloaded without checking, so now it looks
+# for the weights themselves
 _WEIGHT_FILES = ("weights.npz", "weights.safetensors", "model.bin")
 
 
@@ -63,7 +64,8 @@ def _hf_snapshot(model_id: str) -> str | None:
         return None
     if not revisions:
         return None
-    # newest revision wins, sorting by name would just pick whichever hash happened to start with a low character
+    # newest revision wins. sorting by name just picks whichever hash happened
+    # to start with a low character
     return str(max(revisions, key=lambda p: p.stat().st_mtime))
 
 
@@ -129,7 +131,7 @@ def download_model(model_id: str, progress_cb=None) -> str:
             if grand_total > 0:
                 progress_cb(min(0.99, grand_done / grand_total))
 
-    # every model is public, so the token is a nice to have for rate limits and nothing more
+    # every model is public, so the token is a nice to have for rate limits
     sink = io.StringIO()
     try:
         with redirect_stderr(sink):
@@ -161,7 +163,8 @@ def _transcribe_mlx(audio: np.ndarray, model: str) -> str:
                 audio.astype(np.float32),
                 path_or_hf_repo=path,
                 verbose=False,
-                # without this whisper feeds its own output back in and can get  stuck repeating a phrase until the clip runs out
+                # without this whisper feeds its own output back in and gets
+                # stuck repeating a phrase until the clip runs out
                 condition_on_previous_text=False,
             )
     except Exception as e:
