@@ -151,10 +151,10 @@ def _build_theme():
 
 
 class TranscriptionJob:
-    def __init__(self, audio, model_id, mock=False):
-        self.audio    = audio
-        self.model_id = model_id
-        self.mock     = mock
+    def __init__(self, audio, model, mock=False):
+        self.audio = audio
+        self.model = model
+        self.mock  = mock
 
         self.result: str | Exception | None = None
         self.device: str | None = None
@@ -189,29 +189,30 @@ class TranscriptionJob:
             self._done.set()
             return
 
-        if not is_model_cached(self.model_id):
-            _set_status(self.model_id, render.BUSY)
+        repo = self.model.repo
+
+        if not is_model_cached(repo):
+            _set_status(repo, render.BUSY)
             self.download_pct = 0.0
             try:
-                download_model(self.model_id,
-                               progress_cb=lambda pct: setattr(self, "download_pct", pct))
+                download_model(repo, progress_cb=lambda pct: setattr(self, "download_pct", pct))
             except Exception as e:
                 self.download_pct = -1.0
-                _set_status(self.model_id, render.MISSING)
+                _set_status(repo, render.MISSING)
                 self.result = e
                 self._done.set()
                 return
             self.download_pct = -1.0
-            _set_status(self.model_id, render.CACHED)
+            _set_status(repo, render.CACHED)
 
         t0 = time.perf_counter()
         try:
-            text, device = transcribe(self.audio, self.model_id, SAMPLE_RATE)
+            text, device = transcribe(self.audio, repo, SAMPLE_RATE)
             self.decode_secs  = time.perf_counter() - t0
             self.model_loaded = True
             self.result = text
             self.device = device
-            _set_status(self.model_id, render.HOT)
+            _set_status(repo, render.HOT)
         except Exception as e:
             self.decode_secs = time.perf_counter() - t0
             self.result = e
@@ -237,7 +238,6 @@ class App:
             self.model_idx = saved
         else:
             self.model_idx = default_model_idx()
-        self._active_model_idx = self.model_idx
         self.show_dev  = cfg.get("show_dev",   False)
         self.auto_copy = cfg.get("auto_copy",  False)
         self.typewriter = cfg.get("typewriter", True)
@@ -266,12 +266,17 @@ class App:
 
         self._in_settings = False
         self._settings_row = 0
+        self._settings = self._build_settings()
 
         self.theme = None
 
-    def _start_job(self, audio, model_id):
-        self._job = TranscriptionJob(audio, model_id, mock=self._mock)
-        self._job.model_was_cold = _get_status(model_id) != render.HOT
+    @property
+    def model(self):
+        return MODELS[self.model_idx]
+
+    def _start_job(self, audio, model):
+        self._job = TranscriptionJob(audio, model, mock=self._mock)
+        self._job.model_was_cold = _get_status(model.repo) != render.HOT
         self._job.start()
 
     def handle_key(self, key):
@@ -308,9 +313,7 @@ class App:
             self.scr.clear()
         elif key in (ord('m'), ord('M')):
             if self.state not in ("listening", "processing", "draining"):
-                d = -1 if key == ord('M') else 1
-                self._active_model_idx = (self._active_model_idx + d) % len(MODELS)
-                _probe_async(MODELS[self._active_model_idx].repo)
+                self._cycle_model(-1 if key == ord('M') else 1)
         elif key in (ord('a'), ord('A')):
             if self.state == "done" and self.transcript:
                 self._append_prefix = self.transcript
@@ -356,33 +359,29 @@ class App:
         return max(0, len(render.wrap(body, tx_w)) - rows)
 
     def _handle_settings_key(self, key):
-        settings = self._settings_items()
         if key in (27, ord('s'), ord('S'), ord('q'), ord('Q')):
             self._in_settings = False
             self.scr.clear()
         elif key == curses.KEY_UP:
             self._settings_row = max(0, self._settings_row - 1)
         elif key == curses.KEY_DOWN:
-            self._settings_row = min(len(settings) - 1, self._settings_row + 1)
+            self._settings_row = min(len(self._settings) - 1, self._settings_row + 1)
         elif key in (ord(' '), ord('\n'), curses.KEY_ENTER, 10, 13):
-            self._settings_activate(self._settings_row)
+            self._settings[self._settings_row].apply(0)
         elif key == curses.KEY_LEFT:
-            self._settings_adjust(self._settings_row, -1)
+            self._settings[self._settings_row].apply(-1)
         elif key == curses.KEY_RIGHT:
-            self._settings_adjust(self._settings_row, +1)
+            self._settings[self._settings_row].apply(+1)
         return True
 
-    def _settings_items(self):
-        def cycle_model(delta):
-            if delta == 0:
-                delta = 1
-            if self.state in ("listening", "processing", "draining"):
-                return
-            self.model_idx = (self.model_idx + delta) % len(MODELS)
-            self._active_model_idx = self.model_idx
-            _save_state(self)
-            _probe_async(MODELS[self.model_idx].repo)
+    def _cycle_model(self, delta):
+        if self.state in ("listening", "processing", "draining"):
+            return
+        self.model_idx = (self.model_idx + (delta or 1)) % len(MODELS)
+        _save_state(self)
+        _probe_async(self.model.repo)
 
+    def _build_settings(self):
         def toggle_auto_copy(_):
             self.auto_copy = not self.auto_copy
             _save_state(self)
@@ -399,22 +398,12 @@ class App:
             _save_state(self)
 
         return [
-            Setting("Model",      "cycle",  lambda: MODELS[self.model_idx].label,
-                    cycle_model, [m.label for m in MODELS]),
-            Setting("Auto-copy",  "toggle", lambda: self.auto_copy,   toggle_auto_copy),
-            Setting("Typewriter", "toggle", lambda: self.typewriter,  toggle_typewriter),
-            Setting("Dev panel",  "toggle", lambda: self.show_dev,    toggle_dev),
+            Setting("Model",      "cycle",  lambda: self.model.label,
+                    self._cycle_model, [m.label for m in MODELS]),
+            Setting("Auto-copy",  "toggle", lambda: self.auto_copy,  toggle_auto_copy),
+            Setting("Typewriter", "toggle", lambda: self.typewriter, toggle_typewriter),
+            Setting("Dev panel",  "toggle", lambda: self.show_dev,   toggle_dev),
         ]
-
-    def _settings_activate(self, row):
-        items = self._settings_items()
-        if 0 <= row < len(items):
-            items[row].apply(0)
-
-    def _settings_adjust(self, row, delta):
-        items = self._settings_items()
-        if 0 <= row < len(items):
-            items[row].apply(delta)
 
     def _do_copy(self):
         try:
@@ -491,7 +480,7 @@ class App:
             else:
                 new_text   = (res or "").strip()
                 words      = len(new_text.split()) if new_text else 0
-                label      = MODELS[self._active_model_idx].label
+                label      = job.model.label
                 self._last_word_count = words
                 self._last_audio_secs = total_secs
                 self.dev_rows = self._dev_snapshot(job, total_secs, words)
@@ -546,8 +535,7 @@ class App:
                 self._hist[:] = 0.0; self._peak[:] = 0.0
                 self.state = "processing"
                 self._proc_tick = 0
-                mid = MODELS[self._active_model_idx].repo
-                self._start_job(self._captured, mid)
+                self._start_job(self._captured, self.model)
 
         if self.state == "listening":
             raw = self.audio.current_rms()
@@ -569,7 +557,7 @@ class App:
         """Three lines, always three lines, so the panel never changes shape."""
         bullet = f" {render.glyph('BULLET')} "
         where  = BACKEND_NAME + (f"{bullet}{job.device}" if job and job.device else "")
-        rows   = [("model", f"{MODELS[self._active_model_idx].label}{bullet}{where}")]
+        rows   = [("model", f"{job.model.label if job else self.model.label}{bullet}{where}")]
 
         if error:
             rows.append(("audio", f"{audio_secs:.1f}s"))
@@ -593,9 +581,9 @@ class App:
     def draw(self):
         h, w = self.scr.getmaxyx()
 
-        status = _get_status(MODELS[self._active_model_idx].repo)
+        status = _get_status(self.model.repo)
         device = f" {self._transcribe_device}" if self._transcribe_device else ""
-        model_label = f"{MODELS[self._active_model_idx].label} {render.status_glyph(status)}{device}"
+        model_label = f"{self.model.label} {render.status_glyph(status)}{device}"
 
         job = self._job
 
@@ -610,7 +598,7 @@ class App:
                 else "encryption unavailable  -  pip install cryptography"
             )
             runs = render.compose_settings(
-                w, h, self._settings_items(), self._settings_row, self.theme,
+                w, h, self._settings, self._settings_row, self.theme,
                 models=MODELS, model_status=status_copy,
                 crypto_status=crypto_status,
             )
@@ -662,8 +650,7 @@ class App:
                 model_was_cold=job.model_was_cold if job else False,
                 model_loaded=job.model_loaded if job else False,
                 download_pct=job.download_pct if job else -1.0,
-                download_label=f"{MODELS[self._active_model_idx].label} "
-                               f"({size_label(MODELS[self._active_model_idx].mb)})",
+                download_label=f"{self.model.label} ({size_label(self.model.mb)})",
                 model_missing=status == render.MISSING,
                 scroll_offset=self._scroll_offset,
                 word_count=self._last_word_count,
@@ -699,8 +686,7 @@ class App:
         self.dev_rows = []
         self.state = "processing"
         self._proc_tick = 0
-        mid = MODELS[self._active_model_idx].repo
-        self._start_job(audio, mid)
+        self._start_job(audio, self.model)
 
     def run(self, input_path: str | None = None):
         curses.curs_set(0); self.scr.nodelay(1); self.scr.keypad(1)
@@ -712,7 +698,7 @@ class App:
             raise SystemExit("tinytalk requires a colour terminal")
         curses.start_color(); curses.use_default_colors()
         self.theme = _build_theme()
-        _probe_async(MODELS[self.model_idx].repo)
+        _probe_async(self.model.repo)
 
         if input_path:
             self.inject_audio(input_path)
