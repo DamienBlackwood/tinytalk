@@ -2,14 +2,16 @@
 
 import sys
 import io
+import os
 import numpy as np
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from typing import NamedTuple
 
-_HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
-
 BACKEND_NAME = "mlx" if sys.platform == "darwin" else "faster-whisper"
+
+# before it could say that it was downloaded, but now I made it check if the weights are actually present
+_WEIGHT_FILES = ("weights.npz", "weights.safetensors", "model.bin")
 
 
 class Model(NamedTuple):
@@ -41,17 +43,46 @@ def size_label(mb: int) -> str:
     return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb} MB"
 
 
+def _cache_root() -> Path:
+    for var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        val = os.environ.get(var)
+        if val:
+            return Path(val).expanduser()
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home).expanduser() / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
 def _hf_snapshot(model_id: str) -> str | None:
-    folder    = _HF_CACHE / ("models--" + model_id.replace("/", "--"))
-    snapshots = folder / "snapshots"
-    if not snapshots.exists():
+    snapshots = _cache_root() / ("models--" + model_id.replace("/", "--")) / "snapshots"
+    try:
+        revisions = [p for p in snapshots.iterdir() if p.is_dir()]
+    except OSError:
         return None
-    entries = sorted(snapshots.iterdir())
-    return str(entries[0]) if entries else None
+    if not revisions:
+        return None
+    # newest revision wins, sorting by name would just pick whichever hash happened to start with a low character
+    return str(max(revisions, key=lambda p: p.stat().st_mtime))
 
 
 def is_model_cached(model_id: str) -> bool:
-    return _hf_snapshot(model_id) is not None
+    snapshot = _hf_snapshot(model_id)
+    if snapshot is None:
+        return False
+    folder = Path(snapshot)
+    # these are symlinks into blobs/ so a half-finished download reads as missing
+    return any((folder / name).exists() for name in _WEIGHT_FILES)
+
+
+def default_model_idx(fallback: int = DEFAULT_MODEL_IDX) -> int:
+    """What to select on a first run. If the usual default isn't on disk but
+    something else is, use that instead of making someone sit through a 1.6 GB
+    download before they can say hello."""
+    if is_model_cached(MODELS[fallback].repo):
+        return fallback
+    cached = [i for i, m in enumerate(MODELS) if is_model_cached(m.repo)]
+    return max(cached, key=lambda i: MODELS[i].mb) if cached else fallback
 
 
 def check_token() -> str | None:

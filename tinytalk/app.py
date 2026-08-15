@@ -8,7 +8,7 @@ from . import paths, render
 from .audio import AudioCapture, MicError, SAMPLE_RATE, check_clip, load_file
 from .backend import (
     transcribe, is_model_cached, check_token, download_model,
-    MODELS, DEFAULT_MODEL_IDX, BACKEND_NAME,
+    MODELS, default_model_idx, BACKEND_NAME,
 )
 from . import transcripts as transcript_log
 from . import crypto as crypto_mod
@@ -212,9 +212,11 @@ class App:
         self.spin_i = 0
         self.tick = 0
         cfg = _load_cfg()
-        self.model_idx  = cfg.get("model_idx", DEFAULT_MODEL_IDX)
-        if not (0 <= self.model_idx < len(MODELS)):
-            self.model_idx = DEFAULT_MODEL_IDX
+        saved = cfg.get("model_idx")
+        if isinstance(saved, int) and 0 <= saved < len(MODELS):
+            self.model_idx = saved
+        else:
+            self.model_idx = default_model_idx()
         self._active_model_idx = self.model_idx
         self.show_dev  = cfg.get("show_dev",   False)
         self.auto_copy = cfg.get("auto_copy",  False)
