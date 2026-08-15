@@ -160,6 +160,8 @@ def _transcribe_mlx(audio: np.ndarray, model: str) -> str:
                 audio.astype(np.float32),
                 path_or_hf_repo=path,
                 verbose=False,
+                # without this whisper feeds its own output back in and can get  stuck repeating a phrase until the clip runs out
+                condition_on_previous_text=False,
             )
     except Exception as e:
         detail = sink.getvalue().strip()
@@ -198,7 +200,11 @@ def _transcribe_faster(audio: np.ndarray, model: str) -> tuple[str, str]:
 
     sink = io.StringIO()
     with redirect_stdout(sink), redirect_stderr(sink):
-        segments, _ = m.transcribe(audio.astype(np.float32), beam_size=5)
+        segments, _ = m.transcribe(
+            audio.astype(np.float32),
+            beam_size=5,
+            condition_on_previous_text=False,
+        )
         text = " ".join(s.text for s in segments).strip()
 
     return text, device
