@@ -3,6 +3,7 @@ import curses, json, threading, time, collections, subprocess, sys, numpy as np
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Any
+from . import __version__
 from . import paths, render
 from .audio import AudioCapture, SAMPLE_RATE
 from .backend import (
@@ -22,7 +23,7 @@ class Setting:
     apply: Callable[[int], None]
     options: list[str] | None = None
 
-VERSION  = "v0.3"
+VERSION  = "v" + ".".join(__version__.split(".")[:2])
 FRAME_DT = 1 / 60
 TYPE_DT  = 0.016
 
