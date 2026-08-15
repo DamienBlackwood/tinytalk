@@ -790,6 +790,50 @@ _MOCK_TEXT = (
     "Suspendisse cursus ligula sapien. Nunc metus sem."
 )
 
+HELP = """tinytalk - push to talk, transcribed on your own machine
+
+usage:
+  tinytalk                    start the recorder
+  tinytalk --input FILE       transcribe an audio file instead
+  tinytalk log [options]      read back what you've said
+
+options:
+  --input FILE   audio or video file to transcribe (needs ffmpeg for non-WAV)
+  --model NAME   pick a model for this run: {models}
+  --ascii        force the ASCII renderer
+  --mock         fake transcription, for poking at the UI
+  --version      print the version
+  --help         this
+
+files live in {home} (set TINYTALK_HOME to move them)
+"""
+
+
+def _resolve_input(raw: str) -> str:
+    """Plain filenames also get looked up in audio-input/, which is where I
+    keep test clips."""
+    p = Path(raw).expanduser()
+    if p.exists() or p.is_absolute():
+        return str(p)
+    local = Path("audio-input") / raw
+    return str(local if local.exists() else p)
+
+
+def _pick_ascii(cfg, forced):
+    if forced:
+        return True
+    if "ascii" in cfg:
+        return bool(cfg["ascii"])
+    if sys.platform == "win32":
+        return "utf" not in (getattr(sys.stdout, "encoding", "") or "").lower()
+    import locale
+    try:
+        "┌│└".encode(locale.getpreferredencoding(False))
+        return False
+    except (UnicodeEncodeError, LookupError):
+        return True
+
+
 def main():
     import locale, os, argparse
 
@@ -799,10 +843,24 @@ def main():
         from .cli_log import main as log_main
         raise SystemExit(log_main(sys.argv[2:]))
 
+    labels = ", ".join(m.label.lower() for m in MODELS)
     p = argparse.ArgumentParser(add_help=False)
-    p.add_argument("--input", metavar="FILE", default=None)
+    p.add_argument("--input", metavar="FILE")
+    p.add_argument("--model", metavar="NAME")
+    p.add_argument("--ascii", action="store_true")
     p.add_argument("--mock", action="store_true")
-    args, _ = p.parse_known_args()
+    p.add_argument("--version", action="store_true")
+    p.add_argument("-h", "--help", action="store_true")
+    args, unknown = p.parse_known_args()
+
+    if args.help:
+        print(HELP.format(models=labels, home=paths.HOME))
+        return
+    if args.version:
+        print(f"tinytalk {__version__}")
+        return
+    if unknown:
+        raise SystemExit(f"tinytalk: don't know what to do with {unknown[0]}  (try --help)")
 
     if sys.platform == "win32":
         os.system("chcp 65001 >nul 2>&1")
@@ -815,26 +873,24 @@ def main():
         os.environ["TERM"] = "xterm-256color"
 
     cfg = _load_cfg()
-    if "ascii" in cfg:
-        render.USE_ASCII = bool(cfg["ascii"])
-    else:
-        if sys.platform == "win32":
-            import io
-            stdout_enc = getattr(sys.stdout, "encoding", "") or ""
-            render.USE_ASCII = "utf" not in stdout_enc.lower()
-        else:
-            enc = locale.getpreferredencoding(False)
-            try:
-                "┌│└".encode(enc)
-                render.USE_ASCII = False
-            except (UnicodeEncodeError, LookupError):
-                render.USE_ASCII = True
+    render.USE_ASCII = _pick_ascii(cfg, args.ascii)
 
-    input_path = args.input
-    if input_path and not Path(input_path).is_absolute():
-        input_path = str(Path("audio-input") / input_path)
+    model_idx = None
+    if args.model:
+        wanted = args.model.strip().lower()
+        model_idx = next((i for i, m in enumerate(MODELS) if m.label.lower() == wanted), None)
+        if model_idx is None:
+            raise SystemExit(f"tinytalk: no model called {args.model!r}  (pick one of: {labels})")
+
+    input_path = _resolve_input(args.input) if args.input else None
+
+    def boot(scr):
+        app = App(scr, mock=args.mock)
+        if model_idx is not None:
+            app.model_idx = model_idx  # just for this run, don't write it to disk
+        app.run(input_path)
 
     try:
-        curses.wrapper(lambda scr: App(scr, mock=args.mock).run(input_path))
+        curses.wrapper(boot)
     except KeyboardInterrupt:
         pass
