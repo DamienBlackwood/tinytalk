@@ -5,7 +5,21 @@ import sounddevice as sd
 
 SAMPLE_RATE  = 16000
 CHUNK        = 512
-RING_CHUNKS  = 80  # ~2.5s at 16kHz/512
+RING_CHUNKS  = 80     # ~2.5s at 16kHz/512
+
+
+class MicError(RuntimeError):
+    pass
+
+
+def _mic_hint(err: Exception) -> str:
+    msg = (str(err).strip() or type(err).__name__).splitlines()[0]
+    low = msg.lower()
+    if "permission" in low or "denied" in low:
+        return "microphone permission denied  -  allow your terminal in system settings"
+    if "no default input" in low or "invalid device" in low or "no such device" in low:
+        return "no microphone found"
+    return f"couldn't open the mic  -  {msg[:60]}"
 
 
 class AudioCapture:
@@ -22,15 +36,20 @@ class AudioCapture:
         with self._lock:
             self._chunks.clear()
             self._ring.clear()
+        # the stream is opened per recording on purpose.
         if self._stream is None:
-            self._stream = sd.InputStream(
-                samplerate=self.sample_rate,
-                channels=1,
-                blocksize=self.chunk,
-                dtype="float32",
-                callback=self._cb,
-            )
-            self._stream.start()
+            try:
+                stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    blocksize=self.chunk,
+                    dtype="float32",
+                    callback=self._cb,
+                )
+                stream.start()
+            except Exception as e:
+                raise MicError(_mic_hint(e)) from e
+            self._stream = stream
         self._recording = True
 
     def disarm(self):
@@ -42,10 +61,13 @@ class AudioCapture:
         return captured
 
     def stop(self):
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
 
     def _cb(self, indata, frames, t, status):
         if not self._recording:

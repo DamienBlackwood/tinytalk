@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Any
 from . import __version__
 from . import paths, render
-from .audio import AudioCapture, SAMPLE_RATE
+from .audio import AudioCapture, MicError, SAMPLE_RATE
 from .backend import (
     transcribe, is_model_cached, check_token, download_model,
     MODELS, DEFAULT_MODEL_IDX, BACKEND_NAME,
@@ -425,17 +425,32 @@ class App:
         except OSError:
             pass
 
+    def _finish_early(self, message):
+        """Bail out of a recording without waking the model up."""
+        self.state = "done"
+        self.err = message
+        self.transcript = ""
+        self.type_pos = 0
+        self._done_tick = 0
+        self._scroll_offset = 0
+        self._append_prefix = ""
+        self.scr.clear()
+
     def _toggle(self):
         if self.state in ("idle", "done"):
             if self.state == "idle":
                 self._append_prefix = ""
+            try:
+                self.audio.arm()
+            except MicError as e:
+                self._finish_early(str(e))
+                return
             self.state = "listening"
             self.transcript = ""; self.err = ""; self.type_pos = 0
             self._hist_idx = -1; self._scroll_offset = 0
-            self._peak[:] = 0.0; self._hist[:] = 0.0; self._smoothed = 0.0
+            self._hist[:] = 0.0; self._peak[:] = 0.0; self._smoothed = 0.0
             self._wave_ceil = render.WAVE_CEIL * 0.24
             self._listen_start = time.perf_counter()
-            self.audio.arm()
         elif self.state == "listening":
             captured = self.audio.disarm()
             if captured is None:
