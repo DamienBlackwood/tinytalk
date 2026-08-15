@@ -3,7 +3,7 @@ import curses, json, threading, time, collections, subprocess, sys, numpy as np
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Any
-from . import render
+from . import paths, render
 from .audio import AudioCapture, SAMPLE_RATE
 from .backend import (
     transcribe, is_model_cached, check_token, download_model,
@@ -28,7 +28,6 @@ TYPE_DT  = 0.016
 
 _model_status: dict[str, str] = {}
 _model_status_lock = threading.Lock()
-_CFG_PATH = Path(__file__).parent.parent / ".tinytalk" / "config.json"
 
 
 def _probe_model_status(model_id: str):
@@ -37,14 +36,16 @@ def _probe_model_status(model_id: str):
 
 def _load_cfg():
     try:
-        return json.loads(_CFG_PATH.read_text())
+        data = json.loads(paths.CONFIG.read_text())
+        return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
 
 def _save_cfg(data):
     try:
-        _CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _CFG_PATH.write_text(json.dumps(data, indent=2))
+        if not paths.ensure_home():
+            return
+        paths.CONFIG.write_text(json.dumps(data, indent=2))
     except OSError:
         pass
 
@@ -748,6 +749,9 @@ _MOCK_TEXT = (
 
 def main():
     import locale, os, argparse
+
+    paths.adopt_legacy()
+
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--input", metavar="FILE", default=None)
     p.add_argument("--mock", action="store_true")

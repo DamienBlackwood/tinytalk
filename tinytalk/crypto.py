@@ -1,19 +1,20 @@
 """
-AES-256-GCM for transcript text. The key sits at .tinytalk/key next to the
-log. Wipe the folder then you lose the transcripts, and then get a fresh key.
+AES-256-GCM for transcript text. The key sits next to the log in your tinytalk
+folder. Wipe the folder and you lose the transcripts, then get a fresh key.
 
-Only meant to stop someone glancing at the .jsonl on disk, it's just a proof of concept
-and just for fun. FOR NOW!
+Only meant to stop someone glancing at the .jsonl on disk, it's just a proof of
+concept and just for fun. FOR NOW! Anyone who can read the log can read the key
+sitting beside it, so this is not protection against a person at your keyboard.
 
 Envelope: {"enc": "aes-gcm-v1", "n": "<b64 nonce>", "ct": "<b64 ct+tag>"}
 """
 import base64
 import os
 import secrets
-from pathlib import Path
 
-_KEY_PATH = Path(__file__).parent.parent / ".tinytalk" / "key"
-_KEY_BYTES = 32  # AES-256
+from . import paths
+
+_KEY_BYTES   = 32  # AES-256
 _NONCE_BYTES = 12  # GCM standard
 
 ENVELOPE_VERSION = "aes-gcm-v1"
@@ -33,25 +34,24 @@ def available() -> bool:
 
 def _load_or_create_key() -> bytes | None:
     """Load key, or make one if missing. None if something's wrong."""
+    key_path = paths.KEY
     try:
-        if _KEY_PATH.exists():
-            data = _KEY_PATH.read_bytes()
-            if len(data) != _KEY_BYTES:
-                
-                return None
-            return data
+        if key_path.exists():
+            data = key_path.read_bytes()
+            return data if len(data) == _KEY_BYTES else None
 
-        _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if not paths.ensure_home():
+            return None
         key = secrets.token_bytes(_KEY_BYTES)
 
-        # write to .tmp then rename
-        tmp = _KEY_PATH.with_suffix(".key.tmp")
+        # write to .tmp then rename, so a crash mid-write can't leave a half-key behind that silently locks you out of every transcript
+        tmp = key_path.with_name(key_path.name + ".tmp")
         tmp.write_bytes(key)
         try:
             os.chmod(tmp, 0o600)
         except OSError:
             pass  # windows does ACLs, whatever
-        os.replace(tmp, _KEY_PATH)
+        os.replace(tmp, key_path)
         return key
     except OSError:
         return None
