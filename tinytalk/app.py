@@ -128,9 +128,10 @@ class TranscriptionJob:
 
         self.result: str | Exception | None = None
         self.device: str | None = None
-        self.download_pct  = -1.0
+        self.download_pct   = -1.0
         self.model_was_cold = False
         self.model_loaded   = False
+        self.decode_secs    = 0.0
 
         self._done   = threading.Event()
         self._cancel = threading.Event()
@@ -158,8 +159,6 @@ class TranscriptionJob:
             self._done.set()
             return
 
-        t0 = time.perf_counter()
-
         if not is_model_cached(self.model_id):
             with _model_status_lock:
                 _model_status[self.model_id] = "↻"
@@ -178,14 +177,17 @@ class TranscriptionJob:
             with _model_status_lock:
                 _model_status[self.model_id] = "↓"
 
+        t0 = time.perf_counter()
         try:
             text, device = transcribe(self.audio, self.model_id, SAMPLE_RATE)
+            self.decode_secs  = time.perf_counter() - t0
             self.model_loaded = True
             self.result = text
             self.device = device
             with _model_status_lock:
                 _model_status[self.model_id] = "●"
         except Exception as e:
+            self.decode_secs = time.perf_counter() - t0
             self.result = e
 
         self._done.set()
@@ -217,7 +219,7 @@ class App:
         self._peak = np.zeros(N_BARS, dtype=np.float32)
         self._smoothed = 0.0
         self._wave_ceil = render.WAVE_CEIL * 0.24
-        self.dev_log = collections.deque(maxlen=6)
+        self.dev_rows = []
         self._job: TranscriptionJob | None = None
         self._captured = None
         self._drain_tick = 0
@@ -427,6 +429,7 @@ class App:
         self.state = "done"
         self.err = message
         self.transcript = ""
+        self.dev_rows = self._dev_snapshot(None, error=message)
         self.type_pos = 0
         self._done_tick = 0
         self._scroll_offset = 0
@@ -444,6 +447,7 @@ class App:
                 return
             self.state = "listening"
             self.transcript = ""; self.err = ""; self.type_pos = 0
+            self.dev_rows = []
             self._hist_idx = -1; self._scroll_offset = 0
             self._hist[:] = 0.0; self._peak[:] = 0.0; self._smoothed = 0.0
             self._wave_ceil = render.WAVE_CEIL * 0.24
@@ -474,18 +478,18 @@ class App:
             if job.device:
                 self._transcribe_device = job.device
 
+            total_secs = len(job.audio) / SAMPLE_RATE
+
             if isinstance(res, Exception):
                 self.err = str(res); self.transcript = ""
-                self.dev_log.append(f"err: {res}")
+                self.dev_rows = self._dev_snapshot(job, total_secs, error=str(res))
             else:
                 new_text   = (res or "").strip()
-                total_secs = len(job.audio) / SAMPLE_RATE
                 words      = len(new_text.split()) if new_text else 0
                 label      = MODELS[self._active_model_idx].label
                 self._last_word_count = words
                 self._last_audio_secs = total_secs
-                self.dev_log.append(f"{total_secs:.1f}s audio · {label}")
-                self.dev_log.append(f"{words} words")
+                self.dev_rows = self._dev_snapshot(job, total_secs, words)
 
                 if self._append_prefix and new_text:
                     self.transcript = self._append_prefix + " " + new_text
@@ -553,6 +557,31 @@ class App:
             self._peak[-1] = max(self._peak[-1], normed_new)
             self._peak = np.maximum(0.0, self._peak - PEAK_DECAY)
 
+    def _dev_snapshot(self, job, audio_secs=0.0, words=0, error="", stage=""):
+        """Three lines, always three lines, so the panel never changes shape."""
+        bullet = f" {render.glyph('BULLET')} "
+        where  = BACKEND_NAME + (f"{bullet}{job.device}" if job and job.device else "")
+        rows   = [("model", f"{MODELS[self._active_model_idx].label}{bullet}{where}")]
+
+        if error:
+            rows.append(("audio", f"{audio_secs:.1f}s"))
+            rows.append(("error", error[:44]))
+            return rows
+
+        if stage:
+            rows.append(("audio", f"{audio_secs:.1f}s" if audio_secs else "-"))
+            rows.append(("status", stage))
+            return rows
+
+        rows.append(("audio", f"{audio_secs:.1f}s{bullet}{words} words"))
+        decode = job.decode_secs if job else 0.0
+        if decode > 0:
+            ratio = f"{bullet}{audio_secs / decode:.1f}x realtime" if audio_secs else ""
+            rows.append(("decode", f"{decode:.1f}s{ratio}"))
+        else:
+            rows.append(("decode", "-"))
+        return rows
+
     def draw(self):
         h, w = self.scr.getmaxyx()
 
@@ -592,6 +621,19 @@ class App:
                 if self.state == "listening" and self._listen_start
                 else 0.0
             )
+
+            if self.state == "done" and self.dev_rows:
+                dev_rows = self.dev_rows
+            elif self.state == "listening":
+                dev_rows = self._dev_snapshot(None, live_listen_secs, stage="recording")
+            elif self.state == "draining":
+                dev_rows = self._dev_snapshot(None, live_audio_secs, stage="finishing")
+            elif self.state == "processing":
+                stage = "downloading" if job and job.download_pct >= 0.0 else "transcribing"
+                dev_rows = self._dev_snapshot(job, live_audio_secs, stage=stage)
+            else:
+                dev_rows = self._dev_snapshot(None, stage="ready")
+
             rs = render.RenderState(
                 w=w, h=h,
                 state=self.state,
@@ -602,7 +644,7 @@ class App:
                 spin_i=self.spin_i,
                 hist=self._hist.copy() if self.state in ("listening", "draining") else None,
                 show_dev=self.show_dev,
-                dev_log=list(self.dev_log),
+                dev_rows=dev_rows,
                 version=VERSION,
                 model=model_label,
                 wave_ceil=self._wave_ceil,
@@ -647,6 +689,7 @@ class App:
             self._finish_early(problem)
             return
         self._captured = audio
+        self.dev_rows = []
         self.state = "processing"
         self._proc_tick = 0
         mid = MODELS[self._active_model_idx].repo

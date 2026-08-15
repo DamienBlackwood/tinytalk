@@ -54,6 +54,10 @@ def _g():
     return _G_ASCII if USE_ASCII else _G_UNICODE
 
 
+def glyph(name: str) -> str:
+    return _g()[name]
+
+
 WAVE_CEIL = 0.12
 
 PAD   = 2
@@ -157,12 +161,12 @@ class RenderState:
     spin_i: int
     hist: Optional[np.ndarray]
     show_dev: bool
-    dev_log: list
     version: str
     model: str
     wave_ceil: float
     done_tick: int
     theme: "Theme"
+    dev_rows: list = field(default_factory=list)
     clipboard_tick: int = 0
     auto_copy: bool = False
     hist_idx: int = -1
@@ -551,7 +555,6 @@ def compose(rs: RenderState):
     spin_i         = rs.spin_i
     hist           = rs.hist
     show_dev       = rs.show_dev and dev_fits(rs.w, rs.h)
-    dev_log        = rs.dev_log
     version        = rs.version
     model          = rs.model
     wave_ceil      = rs.wave_ceil
@@ -719,7 +722,7 @@ def compose(rs: RenderState):
                 cur_y += 1
 
     stat_y = min(cur_y, text_max_y + 1)
-    if state == "done" and word_count > 0:
+    if state == "done" and not err and word_count > 0 and not show_dev:
         stat      = f"{word_count} words  {g['BULLET']}  {audio_secs:.1f}s"
         stat_attr = theme.dim if done_tick > 40 else theme.soft
         runs.append((stat_y, box_x + _cx(box_w, stat), stat, stat_attr))
@@ -730,11 +733,18 @@ def compose(rs: RenderState):
         if cb_y < foot_y:
             runs.append((cb_y, box_x + _cx(box_w, "copied"), "copied", cb_attr))
 
-    if show_dev and dev_log:
-        dy = box_y + box_h - 1 - len(dev_log)
-        runs.append((dy, ix + 2, f"{g['H']}{g['H']} DEV " + g["H"] * max(0, iw - 9), theme.label))
-        for i, line in enumerate(dev_log):
-            runs.append((dy + 1 + i, ix + 4, line[:iw - 6], theme.dim))
+    if show_dev:
+        # this used to be anchored to the bottom rail, so the last two lines of it landed on the keybinds and the rail
+        rows = (list(rs.dev_rows) + [("", "")] * DEV_ROWS)[:DEV_ROWS]
+        dy   = foot_y - DEV_ROWS - 2
+        rule = f"{g['H']}{g['H']} DEV " + g["H"] * max(0, iw - 9)
+        runs.append((dy, ix + 2, rule, theme.label))
+        pad = max((len(k) for k, _ in rows if k), default=0)
+        for i, (key, val) in enumerate(rows):
+            if not key:
+                continue
+            runs.append((dy + 1 + i, ix + 4, key.ljust(pad), theme.soft))
+            runs.append((dy + 1 + i, ix + 4 + pad + 3, str(val)[:iw - 10 - pad], theme.mid))
 
     kmap = {
         "idle":       [("SPC", "record"), ("m/M", "model"), ("S", "settings"), ("H", "dev"), ("Q", "quit")],
