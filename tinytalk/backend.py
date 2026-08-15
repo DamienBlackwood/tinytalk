@@ -1,12 +1,13 @@
 # the new whisper.py OH YEAHH
 
-import sys
 import io
 import os
-import numpy as np
+import sys
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from typing import NamedTuple
+
+import numpy as np
 
 BACKEND_NAME = "mlx" if sys.platform == "darwin" else "faster-whisper"
 

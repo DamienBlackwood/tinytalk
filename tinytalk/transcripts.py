@@ -13,10 +13,7 @@ def _entry(text: str, model: str, audio_secs: float, words: int) -> dict:
         "words":      words,
     }
     envelope = crypto.encrypt(text)
-    if envelope is not None:
-        base["text"] = envelope
-    else:
-        base["text"] = text
+    base["text"] = envelope if envelope is not None else text
     return base
 
 
