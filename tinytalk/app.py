@@ -552,17 +552,6 @@ class App:
 
     def draw(self):
         h, w = self.scr.getmaxyx()
-        if w < 60 or h < 18:
-            self.scr.erase()
-            msg = f"resize terminal - need 60x18, got {w}x{h}"
-            try:
-                self.scr.addstr(max(0, h // 2), max(0, (w - len(msg)) // 2), msg[:max(0, w - 1)])
-            except Exception:
-                pass
-            self.scr.noutrefresh(); curses.doupdate()
-            return
-
-        self.scr.erase()
 
         mid = MODELS[self._active_model_idx].repo
         with _model_status_lock:
@@ -575,7 +564,9 @@ class App:
 
         job = self._job
 
-        if self._in_settings:
+        if w < 60 or h < 18:
+            runs = [(max(0, h // 2), 0, f"resize terminal - need 60x18, got {w}x{h}"[:max(1, w - 1)], 0)]
+        elif self._in_settings:
             with _model_status_lock:
                 status_copy = dict(_model_status)
             crypto_status = (
@@ -629,17 +620,18 @@ class App:
             )
             runs = render.compose(rs)
 
+        self.scr.erase()
         for y, x, text, attr in runs:
             try:
                 self.scr.addstr(y, x, text, attr)
-            except Exception:
+            except curses.error:
                 pass
-
         try:
             self.scr.move(h - 1, 0)
-        except Exception:
+        except curses.error:
             pass
-        self.scr.noutrefresh(); curses.doupdate()
+        self.scr.noutrefresh()
+        curses.doupdate()
 
     def inject_audio(self, path: str):
         try:

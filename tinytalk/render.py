@@ -56,6 +56,31 @@ def _g():
 
 WAVE_CEIL = 0.12
 
+PAD   = 2
+BOX_Y = 1
+
+
+def _box(w, h):
+    box_w = max(20, min(w - PAD * 2 - 1, w - PAD))
+    box_h = max(6, h - BOX_Y - 1)
+    return PAD, BOX_Y, box_w, box_h, PAD + 2, box_w - 4
+
+
+def _clip(runs, w, h):
+    """Last word on where things may be drawn. Everything else in here does its
+    own arithmetic; this makes sure none of it can walk off the screen."""
+    out = []
+    for y, x, text, attr in runs:
+        if not text or y < 0 or y >= h or x >= w:
+            continue
+        if x < 0:
+            text, x = text[-x:], 0
+        if x + len(text) > w:
+            text = text[: w - x]
+        if text:
+            out.append((y, x, text, attr))
+    return out
+
 
 @dataclass
 class Theme:
@@ -372,13 +397,7 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
     runs = []
     g    = _g()
 
-    PAD   = 2
-    box_x = PAD
-    box_y = 1
-    box_w = max(60, w - PAD * 2 - 1)
-    box_h = max(6, h - box_y - 1)
-    ix    = box_x + 2
-    iw    = box_w - 4
+    box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
 
     runs.extend(chassis(box_y, box_x, box_w, box_h, "TINYTALK", "SETTINGS", theme))
 
@@ -449,7 +468,7 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
     runs.append((foot_y, box_x + _cx(box_w, "S or ESC to close"),
                  "S or ESC to close", theme.dim))
 
-    return runs
+    return _clip(runs, w, h)
 
 
 def _download_bar(pct: float, width: int, theme, tick: int):
@@ -505,17 +524,9 @@ def compose(rs: RenderState):
     listen_secs    = rs.listen_secs
     proc_tick      = rs.proc_tick
 
-    PAD   = 2
-    box_x = PAD
-    box_y = 1
-    box_w = max(60, w - PAD * 2 - 1)
-    box_h = max(6, h - box_y - 1)
-    ix    = box_x + 2
-    iw    = box_w - 4
+    box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
 
-    rail_attr = theme.rail
-
-    chassis_runs = chassis(box_y, box_x, box_w, box_h, "TINYTALK", model, theme, rail_attr)
+    chassis_runs = chassis(box_y, box_x, box_w, box_h, "TINYTALK", model, theme)
 
     cur_y = box_y + 2
 
@@ -692,4 +703,4 @@ def compose(rs: RenderState):
     runs.append((foot_y, box_x + _cx(box_w, sep.join(parts)), sep.join(parts), theme.dim))
 
     runs.extend(chassis_runs)
-    return runs
+    return _clip(runs, rs.w, rs.h)
