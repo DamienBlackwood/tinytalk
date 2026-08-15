@@ -1,19 +1,27 @@
-import curses, json, threading, time, collections, subprocess, sys, numpy as np
+import collections
+import curses
+import json
+import subprocess
+import sys
+import threading
+import time
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Any
+from typing import Any, Callable
+
+import numpy as np
+
 from . import __version__
+from . import crypto as crypto_mod
 from . import paths, render
+from . import transcripts as transcript_log
 from .audio import AudioCapture, MicError, SAMPLE_RATE, check_clip, load_file
 from .backend import (
-    transcribe, is_model_cached, check_token, download_model,
-    MODELS, default_model_idx, BACKEND_NAME, size_label,
+    BACKEND_NAME, MODELS, default_model_idx, download_model, is_model_cached,
+    size_label, transcribe,
 )
-from . import transcripts as transcript_log
-from . import crypto as crypto_mod
 
-# forgot to convert this into a dataclass from the last one
 
 @dataclass
 class Setting:
@@ -22,6 +30,7 @@ class Setting:
     getter: Callable[[], Any]
     apply: Callable[[int], None]
     options: list[str] | None = None
+
 
 VERSION  = "v" + ".".join(__version__.split(".")[:2])
 FRAME_DT = 1 / 60
@@ -56,12 +65,14 @@ def _probe_async(repo: str):
         _model_status[repo] = render.UNKNOWN
     threading.Thread(target=_probe, args=(repo,), daemon=True).start()
 
+
 def _load_cfg():
     try:
         data = json.loads(paths.CONFIG.read_text())
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
+
 
 def _save_cfg(data):
     try:
@@ -70,6 +81,7 @@ def _save_cfg(data):
         paths.CONFIG.write_text(json.dumps(data, indent=2))
     except OSError:
         pass
+
 
 def _save_state(app):
     cfg = _load_cfg()
@@ -80,6 +92,7 @@ def _save_state(app):
         "typewriter": app.typewriter,
     })
     _save_cfg(cfg)
+
 
 N_BARS = 180
 PEAK_DECAY = 0.008   # how fast a peak cap sinks back down, as a share of the ceiling
@@ -252,15 +265,17 @@ class App:
         self.type_start = 0.0
         self.spin_i = 0
         self.tick = 0
+
         cfg = _load_cfg()
         saved = cfg.get("model_idx")
         if isinstance(saved, int) and 0 <= saved < len(MODELS):
             self.model_idx = saved
         else:
             self.model_idx = default_model_idx()
-        self.show_dev  = cfg.get("show_dev",   False)
-        self.auto_copy = cfg.get("auto_copy",  False)
-        self.typewriter = cfg.get("typewriter", True)
+        self.show_dev   = bool(cfg.get("show_dev", False))
+        self.auto_copy  = bool(cfg.get("auto_copy", False))
+        self.typewriter = bool(cfg.get("typewriter", True))
+
         self._hist = np.zeros(N_BARS, dtype=np.float32)
         self._peak = np.zeros(N_BARS, dtype=np.float32)
         self._smoothed = 0.0
@@ -272,9 +287,7 @@ class App:
         self._done_tick  = 0
         self._clipboard_tick = 0
         self._notice_tick = 0
-        self._history = collections.deque(
-            transcript_log.load_recent(5), maxlen=5
-        )
+        self._history = collections.deque(transcript_log.load_recent(5), maxlen=5)
         self._hist_idx = -1
         self._hist_current = ""
         self._append_prefix = ""
@@ -323,8 +336,9 @@ class App:
                 self._hist_idx = -1; self._scroll_offset = 0
                 self._append_prefix = ""
                 self.state = "idle"; self._clear()
-            elif self.state == "listening":
-                self.audio.disarm(); self.state = "idle"
+            elif self.state in ("listening", "draining"):
+                self.audio.disarm()
+                self.state = "idle"
                 self._hist[:] = 0.0; self._peak[:] = 0.0; self._clear()
             return True
         if key == curses.KEY_RESIZE:
@@ -346,7 +360,7 @@ class App:
             if self.state not in ("listening", "processing", "draining"):
                 self._cycle_model(-1 if key == ord('M') else 1)
         elif key in (ord('a'), ord('A')):
-            if self.state == "done" and self.transcript:
+            if self.state == "done" and self.transcript and not self.err:
                 self._append_prefix = self.transcript
                 self._toggle()
         elif key in (ord('c'), ord('C')):
@@ -362,18 +376,15 @@ class App:
             if self.state == "done" and self._history:
                 if self._hist_idx == -1:
                     self._hist_current = self.transcript
-                next_idx = self._hist_idx + 1
-                if next_idx < len(self._history):
-                    self._hist_idx = next_idx
-                    self.transcript = self._history[self._hist_idx]
-                    self.type_pos = len(self.transcript)
-                    self._scroll_offset = 0
+                if self._hist_idx + 1 < len(self._history):
+                    self._hist_idx += 1
+                    self._show_history_entry(self._history[self._hist_idx])
         elif key == ord(']'):
             if self.state == "done" and self._hist_idx >= 0:
                 self._hist_idx -= 1
-                self.transcript = self._hist_current if self._hist_idx == -1 else self._history[self._hist_idx]
-                self.type_pos = len(self.transcript)
-                self._scroll_offset = 0
+                self._show_history_entry(
+                    self._hist_current if self._hist_idx == -1 else self._history[self._hist_idx]
+                )
         elif key == ord(' '):
             if self.state == "processing":
                 if self._job:
@@ -382,6 +393,12 @@ class App:
                 return True
             self._toggle()
         return True
+
+    def _show_history_entry(self, text):
+        self.transcript = text
+        self.err = ""
+        self.type_pos = len(text)
+        self._scroll_offset = 0
 
     def _max_scroll(self, text=None):
         h, w = self.scr.getmaxyx()
@@ -499,46 +516,8 @@ class App:
             return
 
         if self.state == "processing" and self._job and self._job.is_done():
-            job = self._job
+            self._collect(self._job)
             self._job = None
-            res = job.result
-            if job.device:
-                self._transcribe_device = job.device
-
-            total_secs = len(job.audio) / SAMPLE_RATE
-
-            if isinstance(res, Exception):
-                self.err = str(res); self.transcript = ""
-                self.dev_rows = self._dev_snapshot(job, total_secs, error=str(res))
-            else:
-                new_text   = (res or "").strip()
-                words      = len(new_text.split()) if new_text else 0
-                label      = job.model.label
-                self._last_word_count = words
-                self._last_audio_secs = total_secs
-                self.dev_rows = self._dev_snapshot(job, total_secs, words)
-
-                if self._append_prefix and new_text:
-                    self.transcript = self._append_prefix + " " + new_text
-                else:
-                    self.transcript = new_text
-                self._append_prefix = ""
-
-                if new_text:
-                    transcript_log.save(
-                        self.transcript, label, total_secs, words
-                    )
-
-            self.state      = "done"
-            self.type_pos   = 0 if self.typewriter else len(self.transcript)
-            self.type_start = time.perf_counter()
-            self._done_tick = 0
-            self._hist_idx  = -1
-            self._scroll_offset = 0
-            if self.transcript.strip():
-                self._history.appendleft(self.transcript)
-            if self.auto_copy and self.transcript:
-                self._do_copy()
 
         if self.state == "done":
             self._done_tick += 1
@@ -581,7 +560,8 @@ class App:
             target_ceil = max(render.WAVE_CEIL * 0.16, p92 * 1.4)
             rate = GAIN_ATTACK if target_ceil >= self._wave_ceil else GAIN_RELEASE
             self._wave_ceil += (target_ceil - self._wave_ceil) * rate
-            self._hist[:-1] = self._hist[1:]; self._hist[-1] = self._smoothed
+            self._hist[:-1] = self._hist[1:]
+            self._hist[-1]  = self._smoothed
             self._peak[:-1] = self._peak[1:]
             self._peak[-1]  = self._smoothed
             self._peak = np.maximum(self._hist, self._peak - PEAK_DECAY * self._wave_ceil)
@@ -611,14 +591,107 @@ class App:
             rows.append(("decode", "-"))
         return rows
 
-    def draw(self):
-        h, w = self.scr.getmaxyx()
+    def _collect(self, job):
+        res = job.result
+        if job.device:
+            self._transcribe_device = job.device
+        total_secs = len(job.audio) / SAMPLE_RATE
 
+        if isinstance(res, Exception):
+            self.err = str(res)
+            self.transcript = ""
+            self.dev_rows = self._dev_snapshot(job, total_secs, error=str(res))
+        else:
+            new_text   = (res or "").strip()
+            words      = len(new_text.split())
+            self._last_word_count = words
+            self._last_audio_secs = total_secs
+            self.dev_rows = self._dev_snapshot(job, total_secs, words)
+
+            if not new_text:
+                self.err = "whisper didn't hear any words in that"
+            elif self._append_prefix:
+                self.transcript = self._append_prefix + " " + new_text
+            else:
+                self.transcript = new_text
+            self._append_prefix = ""
+
+            if new_text:
+                transcript_log.save(self.transcript, job.model.label, total_secs, words)
+
+        self.state      = "done"
+        self.type_pos   = 0 if self.typewriter else len(self.transcript)
+        self.type_start = time.perf_counter()
+        self._done_tick = 0
+        self._hist_idx  = -1
+        self._scroll_offset = 0
+        if self.transcript.strip():
+            self._history.appendleft(self.transcript)
+        if self.auto_copy and self.transcript:
+            self._do_copy()
+
+    def _render_state(self, w, h):
+        job = self._job
         status = _get_status(self.model.repo)
         device = f" {self._transcribe_device}" if self._transcribe_device else ""
         model_label = f"{self.model.label} {render.status_glyph(status)}{device}"
 
-        job = self._job
+        if self.state == "processing" and self._captured is not None:
+            audio_secs = len(self._captured) / SAMPLE_RATE
+        else:
+            audio_secs = self._last_audio_secs
+
+        listen_secs = (time.perf_counter() - self._listen_start
+                       if self.state == "listening" and self._listen_start else 0.0)
+
+        if self.state == "done" and self.dev_rows:
+            dev_rows = self.dev_rows
+        elif self.state == "listening":
+            dev_rows = self._dev_snapshot(None, listen_secs, stage="recording")
+        elif self.state == "draining":
+            dev_rows = self._dev_snapshot(None, audio_secs, stage="finishing")
+        elif self.state == "processing":
+            stage = "downloading" if job and job.download_pct >= 0.0 else "transcribing"
+            dev_rows = self._dev_snapshot(job, audio_secs, stage=stage)
+        else:
+            dev_rows = self._dev_snapshot(None, stage="ready")
+
+        return render.RenderState(
+            w=w, h=h,
+            state=self.state,
+            transcript=self.transcript,
+            type_pos=self.type_pos,
+            err=self.err,
+            tick=self.tick,
+            spin_i=self.spin_i,
+            hist=self._hist.copy() if self.state in ("listening", "draining") else None,
+            show_dev=self.show_dev,
+            dev_rows=dev_rows,
+            peaks=self._peak.copy() if self.state in ("listening", "draining") else None,
+            version=VERSION,
+            model=model_label,
+            wave_ceil=self._wave_ceil,
+            done_tick=self._done_tick,
+            theme=self.theme,
+            clipboard_tick=self._clipboard_tick,
+            auto_copy=self.auto_copy,
+            hist_idx=self._hist_idx,
+            hist_len=len(self._history),
+            proc_tick=self._proc_tick,
+            model_was_cold=job.model_was_cold if job else False,
+            model_loaded=job.model_loaded if job else False,
+            download_pct=job.download_pct if job else -1.0,
+            download_label=f"{self.model.label} ({size_label(self.model.mb)})",
+            model_missing=status == render.MISSING,
+            scroll_offset=self._scroll_offset,
+            word_count=self._last_word_count,
+            audio_secs=audio_secs,
+            listen_secs=listen_secs,
+            notice=self.notice,
+        )
+
+    def draw(self):
+        h, w = self.scr.getmaxyx()
 
         if w < 60 or h < 18:
             runs = [(max(0, h // 2), 0, f"resize terminal - need 60x18, got {w}x{h}"[:max(1, w - 1)], 0)]
@@ -634,62 +707,7 @@ class App:
                 footnote=note, footnote_ok=ok,
             )
         else:
-            if self.state == "processing" and self._captured is not None:
-                live_audio_secs = len(self._captured) / SAMPLE_RATE
-            else:
-                live_audio_secs = self._last_audio_secs
-            live_listen_secs = (
-                time.perf_counter() - self._listen_start
-                if self.state == "listening" and self._listen_start
-                else 0.0
-            )
-
-            if self.state == "done" and self.dev_rows:
-                dev_rows = self.dev_rows
-            elif self.state == "listening":
-                dev_rows = self._dev_snapshot(None, live_listen_secs, stage="recording")
-            elif self.state == "draining":
-                dev_rows = self._dev_snapshot(None, live_audio_secs, stage="finishing")
-            elif self.state == "processing":
-                stage = "downloading" if job and job.download_pct >= 0.0 else "transcribing"
-                dev_rows = self._dev_snapshot(job, live_audio_secs, stage=stage)
-            else:
-                dev_rows = self._dev_snapshot(None, stage="ready")
-
-            rs = render.RenderState(
-                w=w, h=h,
-                state=self.state,
-                transcript=self.transcript,
-                type_pos=self.type_pos,
-                err=self.err,
-                tick=self.tick,
-                spin_i=self.spin_i,
-                hist=self._hist.copy() if self.state in ("listening", "draining") else None,
-                show_dev=self.show_dev,
-                dev_rows=dev_rows,
-                peaks=self._peak.copy() if self.state in ("listening", "draining") else None,
-                version=VERSION,
-                model=model_label,
-                wave_ceil=self._wave_ceil,
-                done_tick=self._done_tick,
-                theme=self.theme,
-                clipboard_tick=self._clipboard_tick,
-                auto_copy=self.auto_copy,
-                hist_idx=self._hist_idx,
-                hist_len=len(self._history),
-                proc_tick=self._proc_tick,
-                model_was_cold=job.model_was_cold if job else False,
-                model_loaded=job.model_loaded if job else False,
-                download_pct=job.download_pct if job else -1.0,
-                download_label=f"{self.model.label} ({size_label(self.model.mb)})",
-                model_missing=status == render.MISSING,
-                scroll_offset=self._scroll_offset,
-                word_count=self._last_word_count,
-                audio_secs=live_audio_secs,
-                listen_secs=live_listen_secs,
-                notice=self.notice,
-            )
-            runs = render.compose(rs)
+            runs = render.compose(self._render_state(w, h))
 
         # before I kept redrawing frames for an IDLE tinytalk... oh god
         frame = (w, h, runs)
@@ -728,14 +746,17 @@ class App:
         self._start_job(audio, self.model)
 
     def run(self, input_path: str | None = None):
-        curses.curs_set(0); self.scr.nodelay(1); self.scr.keypad(1)
+        curses.curs_set(0)
+        self.scr.nodelay(1)
+        self.scr.keypad(1)
         try:
             curses.set_escdelay(50)  # i forgot to change this lol it was 1 second long before
         except (AttributeError, curses.error):
-            pass # i added this because windows-curses and older versions don't support it (to my knowledge)
+            pass  # i added this because windows-curses and older versions don't support it (to my knowledge)
         if not curses.has_colors():
             raise SystemExit("tinytalk requires a colour terminal")
-        curses.start_color(); curses.use_default_colors()
+        curses.start_color()
+        curses.use_default_colors()
         self.theme = _build_theme()
         _probe_async(self.model.repo)
 
@@ -761,43 +782,15 @@ class App:
             self.audio.stop()
 
 
-# i need to find a better way to deal with this massive chunk of text
+# --mock only needs a wall of text to push the wrapping and scrolling around
+_MOCK_TEXT = " ".join([
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis finibus enim a "
+    "sagittis fringilla. Aliquam erat volutpat. Morbi quis nulla condimentum, auctor "
+    "diam in, ultricies magna. Curabitur sit amet condimentum dolor. Mauris efficitur "
+    "nulla magna, et venenatis libero eleifend eget. Praesent in dapibus lacus, quis "
+    "pellentesque urna. Vestibulum ante ipsum primis in faucibus orci luctus."
+] * 8)
 
-_MOCK_TEXT = (
-    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis finibus enim a sagittis fringilla. "
-    "Aliquam erat volutpat. Morbi quis nulla condimentum, auctor diam in, ultricies magna. Curabitur sit "
-    "amet condimentum dolor. Mauris efficitur nulla magna, et venenatis libero eleifend eget. Praesent in "
-    "dapibus lacus, quis pellentesque urna. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices "
-    "posuere cubilia curae; Morbi sagittis, turpis et tincidunt malesuada, nisl elit efficitur enim, sed "
-    "venenatis eros eros iaculis mi. Mauris vehicula consectetur hendrerit. Nulla quis dolor et turpis "
-    "consequat volutpat. Phasellus tortor odio, eleifend vitae velit sed, tempor mattis risus. "
-    "Vivamus vitae odio arcu. Proin malesuada odio rhoncus, congue urna eu, pulvinar dolor. Nam id orci quam. "
-    "Mauris rhoncus dui sapien, eget elementum leo semper tempor. Pellentesque ullamcorper est libero, at "
-    "scelerisque tortor pulvinar quis. Proin interdum ac nibh sit amet elementum. Ut ac purus id tortor "
-    "suscipit facilisis. Curabitur ipsum metus, rutrum ut feugiat eu, ullamcorper quis metus. Mauris in augue "
-    "magna. Quisque quis volutpat enim. Sed quis leo eget dui pulvinar maximus eu a sapien. In dignissim "
-    "commodo turpis non viverra. In quam massa, pulvinar at maximus sit amet, blandit nec metus. Vestibulum "
-    "gravida nisl malesuada, finibus odio id, tempus dolor. Praesent dictum imperdiet lacus eu viverra. "
-    "Aenean egestas, massa at egestas commodo, sem nulla lacinia arcu, vel accumsan nunc odio a dolor. Donec "
-    "ac hendrerit arcu. Maecenas vel nunc laoreet, feugiat elit vitae, posuere felis. Morbi porttitor rutrum "
-    "efficitur. Duis lobortis auctor augue, quis dignissim metus aliquet quis. Proin egestas ligula arcu, sit "
-    "amet aliquet ante rhoncus in. Donec in enim nec augue volutpat vehicula. Aenean velit arcu, auctor a "
-    "porta ac, cursus at orci. Proin convallis arcu neque, iaculis efficitur leo interdum eget. Maecenas "
-    "venenatis sapien eros, ac pellentesque enim auctor et. Donec scelerisque vestibulum semper. Sed posuere "
-    "scelerisque nulla et blandit. Duis erat lorem, congue nec sem quis, porttitor iaculis metus. Nullam non "
-    "ipsum at est fringilla faucibus. Donec id sem ligula. Morbi risus mauris, pharetra id mi sed, efficitur "
-    "placerat lacus. Proin elementum enim at quam efficitur, sed dapibus erat ultrices. Mauris suscipit ligula "
-    "in diam lobortis, in iaculis dui condimentum. Phasellus fringilla orci eu congue commodo. Nullam sagittis "
-    "dignissim faucibus. Donec a maximus turpis. Maecenas diam risus, interdum nec nunc ac, maximus malesuada "
-    "dui. Suspendisse faucibus maximus ante nec vehicula. Vivamus ultricies accumsan mauris, ac imperdiet magna "
-    "lobortis vitae. Phasellus eleifend diam mauris, vitae mollis mauris dapibus et. Fusce consectetur massa "
-    "mi, eu tincidunt ligula sodales consectetur. Nulla metus turpis, elementum posuere arcu ac, maximus "
-    "placerat purus. Quisque id lorem euismod, imperdiet nisi ut, finibus tortor. Cras auctor tristique "
-    "feugiat. Curabitur ac mattis felis. Fusce porta ipsum risus, quis condimentum mi bibendum sit amet. "
-    "Donec condimentum leo diam, in scelerisque neque porta sit amet. Nunc hendrerit id dui vitae fringilla. "
-    "Etiam tristique interdum metus non vulputate. Nulla viverra sed ex in congue. Nunc in molestie nibh. "
-    "Suspendisse cursus ligula sapien. Nunc metus sem."
-)
 
 HELP = """tinytalk - push to talk, transcribed on your own machine
 
@@ -844,7 +837,9 @@ def _pick_ascii(cfg, forced):
 
 
 def main():
-    import locale, os, argparse
+    import argparse
+    import locale
+    import os
 
     paths.adopt_legacy()
 
@@ -878,6 +873,7 @@ def main():
     except locale.Error:
         pass
 
+    # ghostty's terminfo calls box-drawing characters double width, which walks the cursor two columns for every one it should
     if os.environ.get("TERM") == "xterm-ghostty":
         os.environ["TERM"] = "xterm-256color"
 
