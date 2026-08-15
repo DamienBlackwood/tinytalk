@@ -302,10 +302,7 @@ class App:
                 self._scroll_offset = max(0, self._scroll_offset - 1)
         elif key == curses.KEY_DOWN:
             if self.state == "done":
-                h, w = self.scr.getmaxyx()
-                tx_w = min(72, w - 10)
-                total = len(render.wrap(self.transcript, tx_w))
-                self._scroll_offset = min(self._scroll_offset + 1, max(0, total - 1))
+                self._scroll_offset = min(self._scroll_offset + 1, self._max_scroll())
         elif key == ord('['):
             if self.state == "done" and self._history:
                 if self._hist_idx == -1:
@@ -330,6 +327,12 @@ class App:
                 return True
             self._toggle()
         return True
+
+    def _max_scroll(self, text=None):
+        h, w = self.scr.getmaxyx()
+        tx_w, rows = render.text_view(w, h, self.show_dev)
+        body = self.transcript if text is None else text
+        return max(0, len(render.wrap(body, tx_w)) - rows)
 
     def _handle_settings_key(self, key):
         settings = self._settings_items()

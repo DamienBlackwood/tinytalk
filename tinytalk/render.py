@@ -59,6 +59,29 @@ WAVE_CEIL = 0.12
 PAD   = 2
 BOX_Y = 1
 
+DEV_ROWS   = 3              # always this tall, so the panel never jumps about
+DEV_HEIGHT = DEV_ROWS + 2   # rule line, rows, and a gap above the keybinds
+
+
+def wave_rows(h, show_dev=False):
+    """The waveform gives its rows back on a short terminal, and gives more back
+    when the dev panel wants some. It used to be a flat 7, which left a 60x18
+    window with a header, a footer and nowhere at all to put the transcript."""
+    if show_dev:
+        h -= DEV_HEIGHT
+    if h >= 28:
+        return 7
+    if h >= 24:
+        return 5
+    if h >= 21:
+        return 3
+    return 1
+
+
+def _header_rows(h, show_dev=False):
+    # rail, gap, wordmark, subtitle, gap, chip row, gap, waveform, gap, gap, tag
+    return 7 + wave_rows(h, show_dev) + 3
+
 
 def _box(w, h):
     box_w = max(20, min(w - PAD * 2 - 1, w - PAD))
@@ -80,6 +103,29 @@ def _clip(runs, w, h):
         if text:
             out.append((y, x, text, attr))
     return out
+
+
+def _text_rows(w, h, show_dev):
+    box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
+    top    = box_y + _header_rows(h, show_dev)
+    bottom = (box_y + box_h - 2) - 3 - (DEV_HEIGHT if show_dev else 0)
+    return top, bottom
+
+
+def dev_fits(w, h):
+    """On a short terminal this used to land on the transcript. Now it stays
+    out of the way until there is room for both."""
+    top, bottom = _text_rows(w, h, True)
+    return bottom - top + 1 >= 2
+
+
+def text_view(w, h, show_dev=False):
+    """Width and height of the transcript viewport. app.py needs the same
+    numbers compose() uses for scrolling to land on the right line."""
+    show_dev    = show_dev and dev_fits(w, h)
+    top, bottom = _text_rows(w, h, show_dev)
+    _bx, _by, box_w, _bh, _ix, iw = _box(w, h)
+    return max(1, min(72, iw - 4)), max(1, bottom - top + 1)
 
 
 @dataclass
@@ -133,7 +179,7 @@ class RenderState:
 
 
 def wrap(text, width):
-    if not text:
+    if not text or width < 1:
         return []
     lines, cur = [], ""
     for word in text.split():
@@ -504,7 +550,7 @@ def compose(rs: RenderState):
     tick           = rs.tick
     spin_i         = rs.spin_i
     hist           = rs.hist
-    show_dev       = rs.show_dev
+    show_dev       = rs.show_dev and dev_fits(rs.w, rs.h)
     dev_log        = rs.dev_log
     version        = rs.version
     model          = rs.model
@@ -555,32 +601,30 @@ def compose(rs: RenderState):
     runs.append((cur_y, ix + iw - len("SR 16K"),  "SR 16K",               theme.label))
     cur_y += 2
 
-    WH     = 7
     wave_w = min(iw - 2, 140)
     wave_x = box_x + _cx(box_w, " " * wave_w)
     wave_y = cur_y
+    wave_h = wave_rows(rs.h, show_dev)
 
     if download_pct >= 0.0:
         cur_y += 2
-    elif state in ("listening", "draining"):
-        runs.extend(waveform_active(wave_y, wave_x, wave_w, WH, hist, theme, wave_ceil))
-        cur_y += WH + 2
-    elif state == "processing":
-        runs.extend(waveform_processing(wave_y, wave_x, wave_w, WH, theme, tick, proc_tick))
-        cur_y += WH + 2
-    elif state == "done":
-        runs.extend(waveform_done(wave_y, wave_x, wave_w, WH, theme))
-        cur_y += WH + 2
     else:
-        runs.extend(waveform_idle(wave_y, wave_x, wave_w, WH, theme, tick))
-        cur_y += WH + 2
+        if state in ("listening", "draining"):
+            runs.extend(waveform_active(wave_y, wave_x, wave_w, wave_h, hist, theme, wave_ceil))
+        elif state == "processing":
+            runs.extend(waveform_processing(wave_y, wave_x, wave_w, wave_h, theme, tick, proc_tick))
+        elif state == "done":
+            runs.extend(waveform_done(wave_y, wave_x, wave_w, wave_h, theme))
+        else:
+            runs.extend(waveform_idle(wave_y, wave_x, wave_w, wave_h, theme, tick))
+        cur_y += wave_h + 2
 
-    tx_w = min(72, iw - 4)
-    tx_x = box_x + _cx(box_w, " " * (tx_w + 2))
-    sb_x = tx_x + tx_w + 1
+    tx_w, _ = text_view(rs.w, rs.h, show_dev)
+    tx_x     = box_x + _cx(box_w, " " * (tx_w + 2))
+    sb_x     = tx_x + tx_w + 1
 
     foot_y     = box_y + box_h - 2
-    text_max_y = foot_y - 3
+    text_max_y = foot_y - 3 - (DEV_HEIGHT if show_dev else 0)
 
     if state == "done" and (transcript or err):
         tag      = "TRANSCRIPT" if not err else "ERROR"
