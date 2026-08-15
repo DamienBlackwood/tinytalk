@@ -33,9 +33,27 @@ _model_status: dict[str, str] = {}
 _model_status_lock = threading.Lock()
 
 
-def _probe_model_status(model_id: str):
+def _set_status(repo: str, status: str):
     with _model_status_lock:
-        _model_status[model_id] = "↓" if is_model_cached(model_id) else "✗"
+        _model_status[repo] = status
+
+
+def _get_status(repo: str) -> str:
+    with _model_status_lock:
+        return _model_status.get(repo, render.UNKNOWN)
+
+
+def _probe(repo: str):
+    _set_status(repo, render.CACHED if is_model_cached(repo) else render.MISSING)
+
+
+def _probe_async(repo: str):
+    """Hitting the disk to look for a 1.6GB model shouldn't stall a frame."""
+    with _model_status_lock:
+        if _model_status.get(repo) in (render.CACHED, render.HOT, render.BUSY):
+            return
+        _model_status[repo] = render.UNKNOWN
+    threading.Thread(target=_probe, args=(repo,), daemon=True).start()
 
 def _load_cfg():
     try:
@@ -172,22 +190,19 @@ class TranscriptionJob:
             return
 
         if not is_model_cached(self.model_id):
-            with _model_status_lock:
-                _model_status[self.model_id] = "↻"
+            _set_status(self.model_id, render.BUSY)
             self.download_pct = 0.0
             try:
                 download_model(self.model_id,
                                progress_cb=lambda pct: setattr(self, "download_pct", pct))
             except Exception as e:
                 self.download_pct = -1.0
-                with _model_status_lock:
-                    _model_status[self.model_id] = "✗"
+                _set_status(self.model_id, render.MISSING)
                 self.result = e
                 self._done.set()
                 return
             self.download_pct = -1.0
-            with _model_status_lock:
-                _model_status[self.model_id] = "↓"
+            _set_status(self.model_id, render.CACHED)
 
         t0 = time.perf_counter()
         try:
@@ -196,8 +211,7 @@ class TranscriptionJob:
             self.model_loaded = True
             self.result = text
             self.device = device
-            with _model_status_lock:
-                _model_status[self.model_id] = "●"
+            _set_status(self.model_id, render.HOT)
         except Exception as e:
             self.decode_secs = time.perf_counter() - t0
             self.result = e
@@ -253,18 +267,11 @@ class App:
         self._in_settings = False
         self._settings_row = 0
 
-        mid = MODELS[self.model_idx].repo
-        with _model_status_lock:
-            if mid not in _model_status:
-                _model_status[mid] = "?"
-                threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
         self.theme = None
 
     def _start_job(self, audio, model_id):
         self._job = TranscriptionJob(audio, model_id, mock=self._mock)
-        mid = MODELS[self._active_model_idx].repo
-        with _model_status_lock:
-            self._job.model_was_cold = _model_status.get(mid) != "●"
+        self._job.model_was_cold = _get_status(model_id) != render.HOT
         self._job.start()
 
     def handle_key(self, key):
@@ -303,7 +310,7 @@ class App:
             if self.state not in ("listening", "processing", "draining"):
                 d = -1 if key == ord('M') else 1
                 self._active_model_idx = (self._active_model_idx + d) % len(MODELS)
-                self._probe_active_model()
+                _probe_async(MODELS[self._active_model_idx].repo)
         elif key in (ord('a'), ord('A')):
             if self.state == "done" and self.transcript:
                 self._append_prefix = self.transcript
@@ -374,7 +381,7 @@ class App:
             self.model_idx = (self.model_idx + delta) % len(MODELS)
             self._active_model_idx = self.model_idx
             _save_state(self)
-            self._probe_current_model()
+            _probe_async(MODELS[self.model_idx].repo)
 
         def toggle_auto_copy(_):
             self.auto_copy = not self.auto_copy
@@ -408,20 +415,6 @@ class App:
         items = self._settings_items()
         if 0 <= row < len(items):
             items[row].apply(delta)
-
-    def _probe_current_model(self):
-        mid = MODELS[self.model_idx].repo
-        with _model_status_lock:
-            if _model_status.get(mid) not in ("↓", "●"):
-                _model_status[mid] = "?"
-                threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
-
-    def _probe_active_model(self):
-        mid = MODELS[self._active_model_idx].repo
-        with _model_status_lock:
-            if _model_status.get(mid) not in ("↓", "●"):
-                _model_status[mid] = "?"
-                threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
 
     def _do_copy(self):
         try:
@@ -600,14 +593,9 @@ class App:
     def draw(self):
         h, w = self.scr.getmaxyx()
 
-        mid = MODELS[self._active_model_idx].repo
-        with _model_status_lock:
-            status = _model_status.get(mid, "?")
-        model_label = (
-            f"{MODELS[self._active_model_idx].label} "
-            f"{status}"
-            f"{(' ' + self._transcribe_device) if self._transcribe_device else ''}"
-        )
+        status = _get_status(MODELS[self._active_model_idx].repo)
+        device = f" {self._transcribe_device}" if self._transcribe_device else ""
+        model_label = f"{MODELS[self._active_model_idx].label} {render.status_glyph(status)}{device}"
 
         job = self._job
 
@@ -721,8 +709,11 @@ class App:
             raise SystemExit("tinytalk requires a colour terminal")
         curses.start_color(); curses.use_default_colors()
         self.theme = _build_theme()
+        _probe_async(MODELS[self.model_idx].repo)
+
         if input_path:
             self.inject_audio(input_path)
+
         try:
             while True:
                 while True:

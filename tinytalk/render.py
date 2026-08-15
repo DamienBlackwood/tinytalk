@@ -27,6 +27,7 @@ _G_UNICODE = {
     "ARROW_L": "◀",
     "ARROW_R": "▶",
     "CAP_T": "▔", "CAP_B": "▁",
+    "ST_MISSING": "✗", "ST_CACHED": "↓", "ST_HOT": "●", "ST_BUSY": "↻", "ST_UNKNOWN": "?",
 }
 _G_ASCII = {
     "TL": "+", "TR": "+", "BL": "+", "BR": "+",
@@ -49,11 +50,20 @@ _G_ASCII = {
     "ARROW_L": "<",
     "ARROW_R": ">",
     "CAP_T": "-", "CAP_B": "-",
+    "ST_MISSING": "x", "ST_CACHED": "v", "ST_HOT": "*", "ST_BUSY": "~", "ST_UNKNOWN": "?",
 }
 
 
 def _g():
     return _G_ASCII if USE_ASCII else _G_UNICODE
+
+
+# app.py tracks models as words, not glyphs, so the ascii fallback gets a say
+MISSING, CACHED, HOT, BUSY, UNKNOWN = "missing", "cached", "hot", "busy", "unknown"
+
+
+def status_glyph(status: str) -> str:
+    return _g().get("ST_" + status.upper(), _g()["ST_UNKNOWN"])
 
 
 def glyph(name: str) -> str:
@@ -524,9 +534,9 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
         elif kind == "cycle":
             val = getter()
             if label == "Model" and models is not None:
-                cur_mid = next((m.repo for m in models if m.label == val), None)
-                status  = (model_status or {}).get(cur_mid, "?") if cur_mid else ""
-                inner   = f"{val} {status}".strip()
+                repo   = next((m.repo for m in models if m.label == val), None)
+                status = status_glyph((model_status or {}).get(repo, UNKNOWN)) if repo else ""
+                inner  = f"{val} {status}".strip()
             else:
                 inner = val
             if is_sel:
