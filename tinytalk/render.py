@@ -423,7 +423,7 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
         elif kind == "cycle":
             val = getter()
             if label == "Model" and models is not None:
-                cur_mid = next((m[0] for m in models if m[1] == val), None)
+                cur_mid = next((m.repo for m in models if m.label == val), None)
                 status  = (model_status or {}).get(cur_mid, "?") if cur_mid else ""
                 inner   = f"{val} {status}".strip()
             else:

@@ -5,28 +5,40 @@ import io
 import numpy as np
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
+from typing import NamedTuple
 
 _HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 
 BACKEND_NAME = "mlx" if sys.platform == "darwin" else "faster-whisper"
 
+
+class Model(NamedTuple):
+    repo: str
+    label: str
+    mb: int
+
+
 if sys.platform == "darwin":
     MODELS = [
-        ("mlx-community/whisper-tiny",           "TINY"),
-        ("mlx-community/whisper-base-mlx",       "BASE"),
-        ("mlx-community/whisper-medium-mlx",     "MEDIUM"),
-        ("mlx-community/whisper-large-v3-turbo", "TURBO"),
+        Model("mlx-community/whisper-tiny",             "TINY",    75),
+        Model("mlx-community/whisper-base-mlx",         "BASE",   145),
+        Model("mlx-community/whisper-medium-mlx",       "MEDIUM", 1530),
+        Model("mlx-community/whisper-large-v3-turbo",   "TURBO",  1620),
     ]
     DEFAULT_MODEL_IDX = 3
 else:
     MODELS = [
-        ("Systran/faster-whisper-tiny",     "TINY"),
-        ("Systran/faster-whisper-base",     "BASE"),
-        ("Systran/faster-whisper-small",    "SMALL"),
-        ("Systran/faster-whisper-medium",   "MEDIUM"),
-        ("Systran/faster-whisper-large-v3", "LARGE"),
+        Model("Systran/faster-whisper-tiny",       "TINY",     75),
+        Model("Systran/faster-whisper-base",       "BASE",    145),
+        Model("Systran/faster-whisper-small",      "SMALL",   484),
+        Model("Systran/faster-whisper-medium",     "MEDIUM", 1530),
+        Model("Systran/faster-whisper-large-v3",   "LARGE",  3090),
     ]
     DEFAULT_MODEL_IDX = 0
+
+
+def size_label(mb: int) -> str:
+    return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb} MB"
 
 
 def _hf_snapshot(model_id: str) -> str | None:

@@ -245,7 +245,7 @@ class App:
         self._in_settings = False
         self._settings_row = 0
 
-        mid = MODELS[self.model_idx][0]
+        mid = MODELS[self.model_idx].repo
         with _model_status_lock:
             if mid not in _model_status:
                 _model_status[mid] = "?"
@@ -254,7 +254,7 @@ class App:
 
     def _start_job(self, audio, model_id):
         self._job = TranscriptionJob(audio, model_id, mock=self._mock)
-        mid = MODELS[self._active_model_idx][0]
+        mid = MODELS[self._active_model_idx].repo
         with _model_status_lock:
             self._job.model_was_cold = _model_status.get(mid) != "●"
         self._job.start()
@@ -381,8 +381,8 @@ class App:
             _save_state(self)
 
         return [
-            Setting("Model",      "cycle",  lambda: MODELS[self.model_idx][1],
-                    cycle_model, [m[1] for m in MODELS]),
+            Setting("Model",      "cycle",  lambda: MODELS[self.model_idx].label,
+                    cycle_model, [m.label for m in MODELS]),
             Setting("Auto-copy",  "toggle", lambda: self.auto_copy,   toggle_auto_copy),
             Setting("Typewriter", "toggle", lambda: self.typewriter,  toggle_typewriter),
             Setting("Dev panel",  "toggle", lambda: self.show_dev,    toggle_dev),
@@ -399,14 +399,14 @@ class App:
             items[row].apply(delta)
 
     def _probe_current_model(self):
-        mid = MODELS[self.model_idx][0]
+        mid = MODELS[self.model_idx].repo
         with _model_status_lock:
             if _model_status.get(mid) not in ("↓", "●"):
                 _model_status[mid] = "?"
                 threading.Thread(target=_probe_model_status, args=(mid,), daemon=True).start()
 
     def _probe_active_model(self):
-        mid = MODELS[self._active_model_idx][0]
+        mid = MODELS[self._active_model_idx].repo
         with _model_status_lock:
             if _model_status.get(mid) not in ("↓", "●"):
                 _model_status[mid] = "?"
@@ -484,7 +484,7 @@ class App:
                 new_text   = (res or "").strip()
                 total_secs = len(job.audio) / SAMPLE_RATE
                 words      = len(new_text.split()) if new_text else 0
-                label      = MODELS[self._active_model_idx][1]
+                label      = MODELS[self._active_model_idx].label
                 self._last_word_count = words
                 self._last_audio_secs = total_secs
                 self.dev_log.append(f"{total_secs:.1f}s audio · {label}")
@@ -536,7 +536,7 @@ class App:
                 self._hist[:] = 0.0
                 self.state = "processing"
                 self._proc_tick = 0
-                mid = MODELS[self._active_model_idx][0]
+                mid = MODELS[self._active_model_idx].repo
                 self._start_job(self._captured, mid)
 
         if self.state == "listening":
@@ -570,11 +570,11 @@ class App:
 
         self.scr.erase()
 
-        mid = MODELS[self._active_model_idx][0]
+        mid = MODELS[self._active_model_idx].repo
         with _model_status_lock:
             status = _model_status.get(mid, "?")
         model_label = (
-            f"{MODELS[self._active_model_idx][1]} "
+            f"{MODELS[self._active_model_idx].label} "
             f"{status}"
             f"{(' ' + self._transcribe_device) if self._transcribe_device else ''}"
         )
@@ -660,7 +660,7 @@ class App:
         self._captured = audio
         self.state = "processing"
         self._proc_tick = 0
-        mid = MODELS[self._active_model_idx][0]
+        mid = MODELS[self._active_model_idx].repo
         self._start_job(audio, mid)
 
     def run(self, input_path: str | None = None):
