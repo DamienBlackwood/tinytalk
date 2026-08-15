@@ -133,6 +133,25 @@ class Layout(unittest.TestCase):
                 self.assertGreaterEqual(len(rows), 2,
                                         f"flat waveform at {w}x{h} show_dev={show_dev}")
 
+    def test_the_viewport_is_as_tall_as_text_view_says(self):
+        # app.py scrolls by these numbers, so a disagreement stops the down arrow early
+        theme = render.Theme()
+        text  = "word " * 500
+        for show_dev, w, h in ((d, w, h) for d in (False, True)
+                                         for w in (60, 80, 140)
+                                         for h in (18, 24, 26, 40, 60)):
+            rs = render.RenderState(
+                w=w, h=h, state="done", transcript=text, type_pos=len(text), err="",
+                tick=1, spin_i=0, hist=None, show_dev=show_dev,
+                dev_rows=[("model", "TURBO"), ("audio", "4.2s"), ("decode", "1.1s")],
+                version="v0.4", model="TURBO", wave_ceil=0.1, done_tick=99,
+                theme=theme, word_count=500, audio_secs=3.0,
+            )
+            tx_w, rows = render.text_view(w, h, show_dev)
+            want  = min(len(render.wrap(text, tx_w)), rows)
+            drawn = [t for _y, _x, t, _a in render.compose(rs) if t.startswith("word ")]
+            self.assertEqual(len(drawn), want, f"{w}x{h} show_dev={show_dev}")
+
     def test_ascii_bars_get_denser_not_sparser(self):
         for table in (render._G_ASCII, render._G_UNICODE):
             self.assertEqual(table["STEPS"][0], " ")

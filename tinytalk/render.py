@@ -707,16 +707,18 @@ def compose(rs: RenderState):
                 runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.dim))
                 cur_y += 1
 
-    stat_y = min(cur_y, text_max_y + 1)
+    cur_y = min(cur_y, text_max_y + 1)
+
     if state == "done" and not rs.err and rs.word_count > 0 and not show_dev:
         stat      = f"{rs.word_count} words  {g['BULLET']}  {rs.audio_secs:.1f}s"
         stat_attr = theme.dim if rs.done_tick > 40 else theme.soft
-        runs.append((stat_y, box_x + _cx(box_w, stat), stat, stat_attr))
+        runs.append((cur_y, box_x + _cx(box_w, stat), stat, stat_attr))
+        cur_y += 1
 
     notice = "copied" if rs.clipboard_tick > 0 else rs.notice
-    if notice and stat_y + 1 < foot_y:
+    if notice and cur_y <= body_floor:
         attr = theme.done if rs.clipboard_tick > 22 else theme.mid
-        runs.append((stat_y + 1, box_x + _cx(box_w, notice), notice, attr))
+        runs.append((cur_y, box_x + _cx(box_w, notice), notice, attr))
 
     if show_dev:
         # this used to be anchored to the bottom rail, so the last two lines of it landed on the keybinds and the rail
