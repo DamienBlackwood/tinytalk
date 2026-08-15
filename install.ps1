@@ -2,11 +2,12 @@ param([switch]$Force)
 
 $ErrorActionPreference = "Stop"
 
-$Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Venv = Join-Path $Dir ".venv"
-$Pip = Join-Path $Venv "Scripts\pip.exe"
+$Dir    = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Venv   = Join-Path $Dir ".venv"
+$Pip    = Join-Path $Venv "Scripts\pip.exe"
 $Python = Join-Path $Venv "Scripts\python.exe"
-$Hf = Join-Path $Venv "Scripts\hf.exe"
+$Hf     = Join-Path $Venv "Scripts\hf.exe"
+$Tt     = Join-Path $Venv "Scripts\tinytalk.exe"
 
 Write-Host "tinytalk installer"
 Write-Host ""
@@ -28,10 +29,10 @@ if (Test-Path $Venv) {
 Write-Host "creating venv..."
 python -m venv $Venv
 & $Pip install --upgrade pip -q
-Write-Host ""
 
-Write-Host "Windows found, installing faster-whisper"
-& $Pip install faster-whisper windows-curses numpy sounddevice scipy huggingface_hub[cli] tqdm cryptography -q
+Write-Host ""
+Write-Host "Windows found, installing tinytalk with the faster-whisper backend"
+& $Pip install $Dir -q
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
@@ -40,19 +41,17 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "installing tiny model (default)..."
+Write-Host "installing tiny model (the default here)..."
 & $Hf download Systran/faster-whisper-tiny --quiet
 Write-Host "done."
 
 Write-Host ""
-Write-Host "optional models (run these to install more):"
-Write-Host "  base   ~141MB   hf download Systran/faster-whisper-base"
-Write-Host "  small  ~464MB   hf download Systran/faster-whisper-small"
-Write-Host "  medium ~1.5GB   hf download Systran/faster-whisper-medium"
-Write-Host "  large  ~3GB     hf download Systran/faster-whisper-large-v3"
+Write-Host "other models:"
+Write-Host "  base   ~145MB   hf download Systran/faster-whisper-base"
+Write-Host "  small  ~484MB   hf download Systran/faster-whisper-small"
+Write-Host "  medium  ~1.5GB  hf download Systran/faster-whisper-medium"
+Write-Host "  large   ~3GB    hf download Systran/faster-whisper-large-v3"
 Write-Host ""
 Write-Host "  browse all: https://huggingface.co/Systran"
-Write-Host "  for faster downloads, please log in first: hf auth login"
-
 Write-Host ""
-Write-Host "run: & '$Python' tinytalk.py"
+Write-Host "run: & '$Tt'          read them back later: & '$Tt' log"
