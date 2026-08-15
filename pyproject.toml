@@ -2,6 +2,8 @@
 name = "tinytalk"
 dynamic = ["version"]
 description = "Push-to-talk terminal transcription, powered by Whisper. macOS uses MLX, Windows/Linux use faster-whisper."
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
@@ -14,6 +16,9 @@ dependencies = [
     "faster-whisper; sys_platform != 'darwin'",
     "windows-curses; sys_platform == 'win32'",
 ]
+
+[project.urls]
+Source = "https://github.com/DamienBlackwood/tinytalk"
 
 [project.scripts]
 tinytalk = "tinytalk:main_wrapper"
