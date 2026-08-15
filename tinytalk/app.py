@@ -161,27 +161,19 @@ class TranscriptionJob:
         t0 = time.perf_counter()
 
         if not is_model_cached(self.model_id):
-            token = check_token()
-            if not token:
-                self.result = RuntimeError(
-                    "model not downloaded  -  run: hf auth login  then try again"
-                )
-                self._done.set()
-                return
-
             with _model_status_lock:
                 _model_status[self.model_id] = "↻"
             self.download_pct = 0.0
-
             try:
                 download_model(self.model_id,
                                progress_cb=lambda pct: setattr(self, "download_pct", pct))
             except Exception as e:
                 self.download_pct = -1.0
-                self.result = RuntimeError(f"download failed: {e}")
+                with _model_status_lock:
+                    _model_status[self.model_id] = "✗"
+                self.result = e
                 self._done.set()
                 return
-
             self.download_pct = -1.0
             with _model_status_lock:
                 _model_status[self.model_id] = "↓"

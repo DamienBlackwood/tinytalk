@@ -93,6 +93,17 @@ def check_token() -> str | None:
         return None
 
 
+def _download_hint(err: Exception) -> str:
+    text = str(err)
+    name = type(err).__name__
+    if any(s in text for s in ("401", "403")) or "gated" in text.lower():
+        return "this model needs a login  -  run: hf auth login"
+    if any(s in name for s in ("Connection", "Timeout", "DNS", "SSL")):
+        return "couldn't reach huggingface  -  check your connection"
+    first = text.strip().splitlines()[0] if text.strip() else name
+    return f"download failed: {first[:70]}"
+
+
 def download_model(model_id: str, progress_cb=None) -> str:
     import threading
     from huggingface_hub import snapshot_download
@@ -117,21 +128,18 @@ def download_model(model_id: str, progress_cb=None) -> str:
             if grand_total > 0:
                 progress_cb(min(0.99, grand_done / grand_total))
 
-    import os
-    token = check_token()
-
-    old_stderr = sys.stderr
-    sys.stderr = open(os.devnull, "w")
+    # every model is public, so the token is a nice to have for rate limits and nothing more
+    sink = io.StringIO()
     try:
-        path = snapshot_download(
-            model_id,
-            repo_type="model",
-            token=token or None,
-            tqdm_class=_ProgressTqdm,
-        )
-    finally:
-        sys.stderr.close()
-        sys.stderr = old_stderr
+        with redirect_stderr(sink):
+            path = snapshot_download(
+                model_id,
+                repo_type="model",
+                token=check_token() or None,
+                tqdm_class=_ProgressTqdm,
+            )
+    except Exception as e:
+        raise RuntimeError(_download_hint(e)) from e
 
     if progress_cb:
         progress_cb(1.0)
