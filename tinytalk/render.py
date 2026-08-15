@@ -26,6 +26,7 @@ _G_UNICODE = {
     "UNCHECK": "○",
     "ARROW_L": "◀",
     "ARROW_R": "▶",
+    "CAP_T": "▔", "CAP_B": "▁",
 }
 _G_ASCII = {
     "TL": "+", "TR": "+", "BL": "+", "BR": "+",
@@ -47,6 +48,7 @@ _G_ASCII = {
     "UNCHECK": "o",
     "ARROW_L": "<",
     "ARROW_R": ">",
+    "CAP_T": "-", "CAP_B": "-",
 }
 
 
@@ -188,6 +190,7 @@ class RenderState:
     done_tick: int
     theme: "Theme"
     dev_rows: list = field(default_factory=list)
+    peaks: Optional[np.ndarray] = None
     clipboard_tick: int = 0
     auto_copy: bool = False
     hist_idx: int = -1
@@ -310,36 +313,39 @@ def waveform_processing(y, x, w, h, theme, tick, proc_tick=0):
     return _grid_to_runs(y, x, grid, attr)
 
 
-def waveform_active(y, x, w, h, hist, theme, wave_ceil=WAVE_CEIL):
+def _pool(src, n_slots):
+    """Squash the history buffer down to however many bars fit."""
+    src = src.astype(np.float32, copy=False)
+    if len(src) == n_slots:
+        return src
+    if len(src) > n_slots:
+        trim = src[len(src) - (len(src) // n_slots) * n_slots:]
+        if len(trim) >= n_slots:
+            return trim.reshape(n_slots, -1).max(axis=1)
+    return np.interp(np.linspace(0, 1, n_slots), np.linspace(0, 1, len(src)), src)
+
+
+def waveform_active(y, x, w, h, hist, theme, wave_ceil=WAVE_CEIL, peaks=None):
     if hist is None or len(hist) == 0:
         return _flat(y, x, w, h, theme.glass)
 
     BAR_W, GAP = 2, 1
-    stride  = BAR_W + GAP
-    n_slots = max(1, w // stride)
-
-    src = hist.astype(np.float32, copy=False)
-    if len(src) == n_slots:
-        pooled = src
-    elif len(src) > n_slots:
-        trim = src[len(src) - (len(src) // n_slots) * n_slots:]
-        pooled = trim.reshape(n_slots, -1).mean(axis=1) if len(trim) >= n_slots else \
-                 np.interp(np.linspace(0, 1, n_slots), np.linspace(0, 1, len(src)), src)
-    else:
-        pooled = np.interp(np.linspace(0, 1, n_slots), np.linspace(0, 1, len(src)), src)
+    n_slots = max(1, w // (BAR_W + GAP))
 
     ceil   = max(WAVE_CEIL * 0.16, wave_ceil)
-    levels = np.clip(pooled / ceil, 0.0, 1.0) ** 0.75
+    levels = np.clip(_pool(hist, n_slots) / ceil, 0.0, 1.0) ** 0.75
+    caps   = (np.clip(_pool(peaks, n_slots) / ceil, 0.0, 1.0) ** 0.75
+              if peaks is not None and len(peaks) else None)
 
     recency = np.linspace(0.15, 1.0, n_slots, dtype=np.float32)
 
     grid = [[" "] * w for _ in range(h)]
     attr = [[0]   * w for _ in range(h)]
-    _draw_bars(grid, attr, h, levels, recency, theme, processing=False)
+    _draw_bars(grid, attr, h, levels, recency, theme, processing=False, caps=caps)
     return _grid_to_runs(y, x, grid, attr)
 
 
-def _draw_bars(grid, attr, h, levels, recency, theme, processing=False):
+def _draw_bars(grid, attr, h, levels, recency, theme, processing=False, caps=None):
     BAR_W, GAP = 2, 1
     stride  = BAR_W + GAP
     n_slots = len(levels)
@@ -347,14 +353,14 @@ def _draw_bars(grid, attr, h, levels, recency, theme, processing=False):
     cx      = h // 2
     g       = _g()
     steps   = len(g["STEPS"]) - 1
+    lower   = g["LOWER"]
 
     for col in range(w):
         grid[cx][col] = g["GLASS_H"]
         attr[cx][col] = theme.glass
 
     for i in range(n_slots):
-        lv  = float(levels[i])
-        rec = float(recency[i])
+        lv = float(levels[i])
         if lv <= 0.0:
             continue
 
@@ -362,51 +368,50 @@ def _draw_bars(grid, attr, h, levels, recency, theme, processing=False):
         if col0 + BAR_W > w:
             break
 
+        rec = float(recency[i])
         if processing:
             bar_color = theme.proc if rec > 0.55 else theme.proc_soft
+        elif rec > 0.70:
+            bar_color = theme.on
+        elif rec > 0.35:
+            bar_color = theme.mid
         else:
-            if rec > 0.70:
-                bar_color = theme.on
-            elif rec > 0.35:
-                bar_color = theme.mid
-            else:
-                bar_color = theme.soft
+            bar_color = theme.soft
 
-        top_h_units = lv * (cx - 1) * steps
-        full_cells  = int(top_h_units // steps)
-        rem         = int(round(top_h_units - full_cells * steps))
+        units      = lv * max(1, cx - 1) * steps
+        full_cells = int(units // steps)
+        rem        = int(round(units - full_cells * steps))
+        cols       = range(col0, col0 + BAR_W)
 
         for d in range(1, full_cells + 1):
-            row = cx - d
-            if row < 0:
-                break
-            for bx in range(BAR_W):
-                grid[row][col0 + bx] = g["BAR"]
-                attr[row][col0 + bx] = bar_color
+            for row in (cx - d, cx + d):
+                if 0 <= row < h:
+                    for col in cols:
+                        grid[row][col] = g["BAR"]
+                        attr[row][col] = bar_color
 
         if rem > 0:
-            row = cx - full_cells - 1
-            if row >= 0:
-                ch = g["STEPS"][rem]
-                for bx in range(BAR_W):
-                    grid[row][col0 + bx] = ch
-                    attr[row][col0 + bx] = bar_color
+            top = cx - full_cells - 1
+            if top >= 0:
+                for col in cols:
+                    grid[top][col] = g["STEPS"][rem]
+                    attr[top][col] = bar_color
+            bottom = cx + full_cells + 1
+            if bottom < h:
+                ch = lower[min(rem, len(lower) - 1)]
+                for col in cols:
+                    grid[bottom][col] = ch
+                    attr[bottom][col] = bar_color
 
-        for d in range(1, full_cells + 1):
-            row = cx + d
-            if row >= h:
-                break
-            for bx in range(BAR_W):
-                grid[row][col0 + bx] = g["BAR"]
-                attr[row][col0 + bx] = bar_color
-
-        if rem > 0:
-            row = cx + full_cells + 1
-            if row < h:
-                ch = g["LOWER"][min(rem, len(g["LOWER"]) - 1)]
-                for bx in range(BAR_W):
-                    grid[row][col0 + bx] = ch
-                    attr[row][col0 + bx] = bar_color
+        # peak hold. I need to tweak this more
+        if caps is not None:
+            cap_cells = int(float(caps[i]) * max(1, cx - 1) * steps // steps)
+            if cap_cells > full_cells:
+                for row, ch in ((cx - cap_cells, g["CAP_T"]), (cx + cap_cells, g["CAP_B"])):
+                    if 0 <= row < h and grid[row][col0] == " ":
+                        for col in cols:
+                            grid[row][col] = ch
+                            attr[row][col] = theme.soft
 
 
 def _grid_to_runs(y, x, chars, attrs):
@@ -634,7 +639,8 @@ def compose(rs: RenderState):
         cur_y += 2
     else:
         if state in ("listening", "draining"):
-            runs.extend(waveform_active(wave_y, wave_x, wave_w, wave_h, hist, theme, wave_ceil))
+            runs.extend(waveform_active(wave_y, wave_x, wave_w, wave_h, hist, theme,
+                                        wave_ceil, peaks=rs.peaks))
         elif state == "processing":
             runs.extend(waveform_processing(wave_y, wave_x, wave_w, wave_h, theme, tick, proc_tick))
         elif state == "done":

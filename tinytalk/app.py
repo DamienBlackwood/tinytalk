@@ -61,7 +61,7 @@ def _save_state(app):
     _save_cfg(cfg)
 
 N_BARS = 180
-PEAK_DECAY = 0.012
+PEAK_DECAY = 0.008   # how fast a peak cap sinks back down, as a share of the ceiling
 NOISE_GATE = 0.003
 ATTACK  = 0.55
 RELEASE = 0.14
@@ -563,9 +563,8 @@ class App:
             self._wave_ceil += (target_ceil - self._wave_ceil) * rate
             self._hist[:-1] = self._hist[1:]; self._hist[-1] = self._smoothed
             self._peak[:-1] = self._peak[1:]
-            normed_new = min(1.0, (self._smoothed / max(1e-6, self._wave_ceil)) ** 0.65)
-            self._peak[-1] = max(self._peak[-1], normed_new)
-            self._peak = np.maximum(0.0, self._peak - PEAK_DECAY)
+            self._peak[-1]  = self._smoothed
+            self._peak = np.maximum(self._hist, self._peak - PEAK_DECAY * self._wave_ceil)
 
     def _dev_snapshot(self, job, audio_secs=0.0, words=0, error="", stage=""):
         """Three lines, always three lines, so the panel never changes shape."""
@@ -655,6 +654,7 @@ class App:
                 hist=self._hist.copy() if self.state in ("listening", "draining") else None,
                 show_dev=self.show_dev,
                 dev_rows=dev_rows,
+                peaks=self._peak.copy() if self.state in ("listening", "draining") else None,
                 version=VERSION,
                 model=model_label,
                 wave_ceil=self._wave_ceil,
