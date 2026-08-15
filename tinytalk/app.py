@@ -625,15 +625,13 @@ class App:
         elif self._in_settings:
             with _model_status_lock:
                 status_copy = dict(_model_status)
-            crypto_status = (
-                f"transcripts encrypted  {render._g()['BULLET']}  {crypto_mod.ENVELOPE_VERSION}"
-                if crypto_mod.available()
-                else "encryption unavailable  -  pip install cryptography"
-            )
+            ok = crypto_mod.available()
+            note = (f"transcripts encrypted  {render.glyph('BULLET')}  {crypto_mod.ENVELOPE_VERSION}"
+                    if ok else "encryption unavailable  -  pip install cryptography")
             runs = render.compose_settings(
                 w, h, self._settings, self._settings_row, self.theme,
                 models=MODELS, model_status=status_copy,
-                crypto_status=crypto_status,
+                footnote=note, footnote_ok=ok,
             )
         else:
             if self.state == "processing" and self._captured is not None:

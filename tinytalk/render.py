@@ -1,8 +1,10 @@
 import math
-import sys
 from dataclasses import dataclass, field
 from typing import Optional
+
 import numpy as np
+
+from .backend import BACKEND_NAME
 
 USE_ASCII = False
 
@@ -112,51 +114,6 @@ def _header_rows(h, show_dev=False):
     return 7 + wave_rows(h, show_dev) + 3
 
 
-def _box(w, h):
-    box_w = max(20, min(w - PAD * 2 - 1, w - PAD))
-    box_h = max(6, h - BOX_Y - 1)
-    return PAD, BOX_Y, box_w, box_h, PAD + 2, box_w - 4
-
-
-def _clip(runs, w, h):
-    """Last word on where things may be drawn. Everything else in here does its
-    own arithmetic; this makes sure none of it can walk off the screen."""
-    out = []
-    for y, x, text, attr in runs:
-        if not text or y < 0 or y >= h or x >= w:
-            continue
-        if x < 0:
-            text, x = text[-x:], 0
-        if x + len(text) > w:
-            text = text[: w - x]
-        if text:
-            out.append((y, x, text, attr))
-    return out
-
-
-def _text_rows(w, h, show_dev):
-    box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
-    top    = box_y + _header_rows(h, show_dev)
-    bottom = (box_y + box_h - 2) - 3 - (DEV_HEIGHT if show_dev else 0)
-    return top, bottom
-
-
-def dev_fits(w, h):
-    """On a short terminal this used to land on the transcript. Now it stays
-    out of the way until there is room for both."""
-    top, bottom = _text_rows(w, h, True)
-    return bottom - top + 1 >= 2
-
-
-def text_view(w, h, show_dev=False):
-    """Width and height of the transcript viewport. app.py needs the same
-    numbers compose() uses for scrolling to land on the right line."""
-    show_dev    = show_dev and dev_fits(w, h)
-    top, bottom = _text_rows(w, h, show_dev)
-    _bx, _by, box_w, _bh, _ix, iw = _box(w, h)
-    return max(1, min(72, iw - 4)), max(1, bottom - top + 1)
-
-
 @dataclass
 class Theme:
     dim:       int = 0
@@ -220,6 +177,51 @@ class RenderState:
     notice: str = ""
 
 
+def _box(w, h):
+    box_w = max(20, min(w - PAD * 2 - 1, w - PAD))
+    box_h = max(6, h - BOX_Y - 1)
+    return PAD, BOX_Y, box_w, box_h, PAD + 2, box_w - 4
+
+
+def _clip(runs, w, h):
+    """Last word on where things may be drawn. Everything else in here does its
+    own arithmetic; this makes sure none of it can walk off the screen."""
+    out = []
+    for y, x, text, attr in runs:
+        if not text or y < 0 or y >= h or x >= w:
+            continue
+        if x < 0:
+            text, x = text[-x:], 0
+        if x + len(text) > w:
+            text = text[: w - x]
+        if text:
+            out.append((y, x, text, attr))
+    return out
+
+
+def _text_rows(w, h, show_dev):
+    box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
+    top    = box_y + _header_rows(h, show_dev)
+    bottom = (box_y + box_h - 2) - 3 - (DEV_HEIGHT if show_dev else 0)
+    return top, bottom
+
+
+def dev_fits(w, h):
+    """On a short terminal this used to land on the transcript. Now it stays
+    out of the way until there is room for both."""
+    top, bottom = _text_rows(w, h, True)
+    return bottom - top + 1 >= 2
+
+
+def text_view(w, h, show_dev=False):
+    """Width and height of the transcript viewport. app.py needs the same
+    numbers compose() uses for scrolling to land on the right line."""
+    show_dev    = show_dev and dev_fits(w, h)
+    top, bottom = _text_rows(w, h, show_dev)
+    _bx, _by, box_w, _bh, _ix, iw = _box(w, h)
+    return max(1, min(72, iw - 4)), max(1, bottom - top + 1)
+
+
 def wrap(text, width):
     if not text or width < 1:
         return []
@@ -280,43 +282,26 @@ def chassis(y, x, w, h, label_left, label_right, theme, rail_attr=None):
     return runs
 
 
-def _flat(y, x, w, h, attr):
-    g = _g()
-    return [(y + h // 2, x, g["GLASS_H"] * w, attr)]
-
-
-def waveform_idle(y, x, w, h, theme, tick):
-    g = _g()
-    return [(y + h // 2, x, g["GLASS_H"] * w, theme.glass)]
-
-
-def waveform_done(y, x, w, h, theme):
-    g = _g()
-    return [(y + h // 2, x, g["GLASS_H"] * w, theme.glass)]
+def waveform_rest(y, x, w, h, theme):
+    """Idle and done both get the same flat line through the middle."""
+    return [(y + h // 2, x, _g()["GLASS_H"] * w, theme.glass)]
 
 
 def waveform_processing(y, x, w, h, theme, tick, proc_tick=0):
     BAR_W, GAP = 2, 1
-    stride  = BAR_W + GAP
-    n_slots = max(1, w // stride)
+    n_slots = max(1, w // (BAR_W + GAP))
 
     PERIOD = 150
     head   = (tick % PERIOD) / PERIOD * n_slots
-    SIGMA  = max(2.0, n_slots / 7.0)
+    sigma  = max(2.0, n_slots / 7.0)
 
-    # cleaned up the transition
     fade_in = min(1.0, proc_tick / 30.0)
     fade_in = 1.0 - (1.0 - fade_in) ** 3
 
-    levels = np.zeros(n_slots, dtype=np.float32)
-    for i in range(n_slots):
-        d = i - head
-        t = max(
-            float(np.exp(-0.5 * (d / SIGMA) ** 2)),
-            float(np.exp(-0.5 * ((d - n_slots) / SIGMA) ** 2)),
-            float(np.exp(-0.5 * ((d + n_slots) / SIGMA) ** 2)),
-        )
-        levels[i] = t
+    # a gaussian sweeping left to right, wrapped so it doesn't pop
+    idx    = np.arange(n_slots, dtype=np.float32)
+    offset = np.stack([idx - head, idx - head - n_slots, idx - head + n_slots])
+    levels = np.exp(-0.5 * (offset / sigma) ** 2).max(axis=0)
 
     recency = np.linspace(0.3, 1.0, n_slots, dtype=np.float32)
     levels  = levels * recency * fade_in
@@ -341,7 +326,7 @@ def _pool(src, n_slots):
 
 def waveform_active(y, x, w, h, hist, theme, wave_ceil=WAVE_CEIL, peaks=None):
     if hist is None or len(hist) == 0:
-        return _flat(y, x, w, h, theme.glass)
+        return waveform_rest(y, x, w, h, theme)
 
     BAR_W, GAP = 2, 1
     n_slots = max(1, w // (BAR_W + GAP))
@@ -462,16 +447,15 @@ def _chip_text(state, spin_i):
 def _scrollbar(y0, height, total_lines, visible_lines, offset, x, theme):
     if total_lines <= visible_lines or height < 2:
         return []
-    g = _g()
+    g    = _g()
     runs = []
-    track_h = height
-    thumb_h = max(1, round(track_h * visible_lines / total_lines))
-    thumb_top = round(track_h * offset / total_lines)
-    thumb_top = min(thumb_top, track_h - thumb_h)
-    for i in range(track_h):
-        ch   = g["SCROLL_THUMB"] if thumb_top <= i < thumb_top + thumb_h else g["SCROLL_TRACK"]
-        attr = theme.mid if thumb_top <= i < thumb_top + thumb_h else theme.dim
-        runs.append((y0 + i, x, ch, attr))
+    thumb_h   = max(1, round(height * visible_lines / total_lines))
+    thumb_top = min(round(height * offset / total_lines), height - thumb_h)
+    for i in range(height):
+        on   = thumb_top <= i < thumb_top + thumb_h
+        runs.append((y0 + i, x,
+                     g["SCROLL_THUMB"] if on else g["SCROLL_TRACK"],
+                     theme.mid if on else theme.dim))
     return runs
 
 
@@ -483,7 +467,8 @@ _SETTING_HINTS = {
 }
 
 
-def compose_settings(w, h, items, selected_row, theme, models=None, model_status=None, crypto_status=""):
+def compose_settings(w, h, items, selected_row, theme, models=None, model_status=None,
+                     footnote="", footnote_ok=False):
     runs = []
     g    = _g()
 
@@ -510,7 +495,6 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
     ctrl_w  = 16
 
     for i, item in enumerate(items):
-        label, kind, getter, options = item.label, item.kind, item.getter, item.options
         row_y    = cur_y + i * 2
         is_sel   = i == selected_row
         lbl_attr = theme.text  if is_sel else theme.label
@@ -519,34 +503,31 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
         if is_sel:
             runs.append((row_y, inner_x, " " * inner_w, theme.glass))
 
-        runs.append((row_y, inner_x + 2, label, lbl_attr))
+        runs.append((row_y, inner_x + 2, item.label, lbl_attr))
 
-        hint     = _SETTING_HINTS.get(label, "")
-        hint_x   = inner_x + 2 + len(label) + 2
+        hint     = _SETTING_HINTS.get(item.label, "")
+        hint_x   = inner_x + 2 + len(item.label) + 2
         hint_end = inner_x + inner_w - ctrl_w - 1
-        if hint_end > hint_x and hint:
-            runs.append((row_y, hint_x, hint[: hint_end - hint_x], dim_attr))
+        if hint and hint_end - hint_x >= len(hint):
+            runs.append((row_y, hint_x, hint, dim_attr))
 
         ctrl_x = inner_x + inner_w - ctrl_w
 
-        if kind == "toggle":
-            val       = getter()
+        if item.kind == "toggle":
+            val       = item.getter()
             chip      = "[ ON  ]" if val else "[ OFF ]"
             chip_attr = theme.done if val else theme.soft
             runs.append((row_y, ctrl_x + (ctrl_w - len(chip)) // 2, chip, chip_attr))
 
-        elif kind == "cycle":
-            val = getter()
-            if label == "Model" and models is not None:
-                repo   = next((m.repo for m in models if m.label == val), None)
+        elif item.kind == "cycle":
+            val = item.getter()
+            if item.label == "Model" and models is not None:
+                repo   = next((m[0] for m in models if m[1] == val), None)
                 status = status_glyph((model_status or {}).get(repo, UNKNOWN)) if repo else ""
                 inner  = f"{val} {status}".strip()
             else:
                 inner = val
-            if is_sel:
-                chip = f"{g['ARROW_L']} {inner} {g['ARROW_R']}"
-            else:
-                chip = f"  {inner}  "
+            chip      = f"{g['ARROW_L']} {inner} {g['ARROW_R']}" if is_sel else f"  {inner}  "
             chip_attr = theme.on if is_sel else theme.mid
             runs.append((row_y, ctrl_x + max(0, (ctrl_w - len(chip)) // 2), chip, chip_attr))
 
@@ -555,11 +536,9 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
 
     foot_y = box_y + box_h - 2
 
-    if crypto_status:
-        info_y    = foot_y - 1
-        info_attr = theme.done if "active" in crypto_status else theme.dim
-        runs.append((info_y, box_x + _cx(box_w, crypto_status),
-                     crypto_status, info_attr))
+    if footnote:
+        attr = theme.done if footnote_ok else theme.dim
+        runs.append((foot_y - 1, box_x + _cx(box_w, footnote), footnote, attr))
 
     runs.append((foot_y, box_x + _cx(box_w, "S or ESC to close"),
                  "S or ESC to close", theme.dim))
@@ -584,39 +563,16 @@ def _download_bar(pct: float, width: int) -> str:
 
 
 def compose(rs: RenderState):
-    runs = []
-    g = _g()
+    runs  = []
+    g     = _g()
+    theme = rs.theme
+    state = rs.state
+    tick  = rs.tick
 
-    w, h           = rs.w, rs.h
-    state          = rs.state
-    transcript     = rs.transcript
-    type_pos       = rs.type_pos
-    err            = rs.err
-    tick           = rs.tick
-    spin_i         = rs.spin_i
-    hist           = rs.hist
-    show_dev       = rs.show_dev and dev_fits(rs.w, rs.h)
-    version        = rs.version
-    model          = rs.model
-    wave_ceil      = rs.wave_ceil
-    done_tick      = rs.done_tick
-    theme          = rs.theme
-    clipboard_tick = rs.clipboard_tick
-    auto_copy      = rs.auto_copy
-    hist_idx       = rs.hist_idx
-    hist_len       = rs.hist_len
-    model_was_cold = rs.model_was_cold
-    model_loaded   = rs.model_loaded
-    download_pct   = rs.download_pct
-    scroll_offset  = rs.scroll_offset
-    word_count     = rs.word_count
-    audio_secs     = rs.audio_secs
-    listen_secs    = rs.listen_secs
-    proc_tick      = rs.proc_tick
+    box_x, box_y, box_w, box_h, ix, iw = _box(rs.w, rs.h)
+    show_dev = rs.show_dev and dev_fits(rs.w, rs.h)
 
-    box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
-
-    chassis_runs = chassis(box_y, box_x, box_w, box_h, "TINYTALK", model, theme)
+    chassis_runs = chassis(box_y, box_x, box_w, box_h, "TINYTALK", rs.model, theme)
 
     cur_y = box_y + 2
 
@@ -625,18 +581,18 @@ def compose(rs: RenderState):
     runs.append((cur_y, box_x + _cx(box_w, mark), mark, mark_attr))
     cur_y += 1
 
-    backend = "mlx" if sys.platform == "darwin" else "faster-whisper"
-    sub = f"on-device transcription {g['BULLET']} whisper {g['BULLET']} {backend} {g['BULLET']} {version}"
+    sub = (f"on-device transcription {g['BULLET']} whisper {g['BULLET']} "
+           f"{BACKEND_NAME} {g['BULLET']} {rs.version}")
     runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.label))
     cur_y += 2
 
-    chip = _chip_text(state, spin_i)
+    chip = _chip_text(state, rs.spin_i)
     if state in ("listening", "draining"):
         chip_col = _ramp(theme.rec_ramp(), _pulse(tick, 64))
     elif state == "processing":
         chip_col = theme.proc
     elif state == "done":
-        chip_col = _ramp((theme.soft, theme.mid, theme.done), min(1.0, done_tick / 22.0))
+        chip_col = _ramp((theme.soft, theme.mid, theme.done), min(1.0, rs.done_tick / 22.0))
     else:
         chip_col = theme.label
 
@@ -650,18 +606,16 @@ def compose(rs: RenderState):
     wave_y = cur_y
     wave_h = wave_rows(rs.h, show_dev)
 
-    if download_pct >= 0.0:
+    if rs.download_pct >= 0.0:
         cur_y += 2
     else:
         if state in ("listening", "draining"):
-            runs.extend(waveform_active(wave_y, wave_x, wave_w, wave_h, hist, theme,
-                                        wave_ceil, peaks=rs.peaks))
+            runs.extend(waveform_active(wave_y, wave_x, wave_w, wave_h, rs.hist, theme,
+                                        rs.wave_ceil, peaks=rs.peaks))
         elif state == "processing":
-            runs.extend(waveform_processing(wave_y, wave_x, wave_w, wave_h, theme, tick, proc_tick))
-        elif state == "done":
-            runs.extend(waveform_done(wave_y, wave_x, wave_w, wave_h, theme))
+            runs.extend(waveform_processing(wave_y, wave_x, wave_w, wave_h, theme, tick, rs.proc_tick))
         else:
-            runs.extend(waveform_idle(wave_y, wave_x, wave_w, wave_h, theme, tick))
+            runs.extend(waveform_rest(wave_y, wave_x, wave_w, wave_h, theme))
         cur_y += wave_h + 2
 
     tx_w, _ = text_view(rs.w, rs.h, show_dev)
@@ -671,41 +625,41 @@ def compose(rs: RenderState):
     foot_y     = box_y + box_h - 2
     text_max_y = foot_y - 3 - (DEV_HEIGHT if show_dev else 0)
 
-    if state == "done" and (transcript or err):
-        tag      = "TRANSCRIPT" if not err else "ERROR"
-        tag_attr = (theme.err  if err else
-                    theme.label if done_tick > 12 else theme.soft)
+    if state == "done" and (rs.transcript or rs.err):
+        tag      = "ERROR" if rs.err else "TRANSCRIPT"
+        tag_attr = (theme.err   if rs.err else
+                    theme.label if rs.done_tick > 12 else theme.soft)
         runs.append((cur_y, box_x + _cx(box_w, tag), tag, tag_attr))
-        if hist_idx >= 0 and hist_len > 0:
-            badge = f"[{hist_idx + 1}/{hist_len}]"
+        if rs.hist_idx >= 0 and rs.hist_len > 0:
+            badge = f"[{rs.hist_idx + 1}/{rs.hist_len}]"
             runs.append((cur_y, tx_x + tx_w - len(badge), badge, theme.soft))
         cur_y += 1
 
-    if err and state == "done":
-        err_lines = wrap(err, tx_w)[:3]
+    if rs.err and state == "done":
+        err_lines = wrap(rs.err, tx_w)[:3]
         for i, line in enumerate(err_lines):
             runs.append((cur_y + i, tx_x, line, theme.err))
         cur_y += len(err_lines)
 
-    elif transcript and state == "done":
-        txt_attr      = theme.text if done_tick > 2 else theme.mid
-        all_lines     = wrap(transcript[:type_pos], tx_w)
+    elif rs.transcript and state == "done":
+        txt_attr      = theme.text if rs.done_tick > 2 else theme.mid
+        lines         = wrap(rs.transcript[:rs.type_pos], tx_w)
         visible_h     = max(1, text_max_y - cur_y + 1)
-        total_lines   = len(all_lines)
-        max_offset    = max(0, total_lines - visible_h)
-        scroll_offset = min(scroll_offset, max_offset)
-        visible_lines = all_lines[scroll_offset: scroll_offset + visible_h]
+        total_lines   = len(lines)
+        scroll_offset = min(rs.scroll_offset, max(0, total_lines - visible_h))
+        visible       = lines[scroll_offset: scroll_offset + visible_h]
 
-        for i, line in enumerate(visible_lines):
+        for i, line in enumerate(visible):
             runs.append((cur_y + i, tx_x, line, txt_attr))
 
         if total_lines > visible_h:
-            runs.extend(_scrollbar(cur_y, visible_h, total_lines, visible_h, scroll_offset, sb_x, theme))
+            runs.extend(_scrollbar(cur_y, visible_h, total_lines, visible_h,
+                                   scroll_offset, sb_x, theme))
 
-        if type_pos < len(transcript) and visible_lines:
+        if rs.type_pos < len(rs.transcript) and visible:
             cursor_vis = (total_lines - 1) - scroll_offset
-            if 0 <= cursor_vis < len(visible_lines) and (tick // 32) % 2 == 0:
-                runs.append((cur_y + cursor_vis, tx_x + len(visible_lines[cursor_vis]), "|", theme.on))
+            if 0 <= cursor_vis < len(visible) and (tick // 32) % 2 == 0:
+                runs.append((cur_y + cursor_vis, tx_x + len(visible[cursor_vis]), "|", theme.on))
 
         cur_y += min(total_lines, visible_h)
 
@@ -719,54 +673,52 @@ def compose(rs: RenderState):
             cur_y += 1
 
     elif state == "listening":
-        mins, secs = divmod(int(listen_secs), 60)
-        timer = f"{mins}:{secs:02d}"
-        line  = f"SPACE to stop  {g['BULLET']}  {timer}"
+        mins, secs = divmod(int(rs.listen_secs), 60)
+        line = f"SPACE to stop  {g['BULLET']}  {mins}:{secs:02d}"
         runs.append((cur_y, box_x + _cx(box_w, line), line, theme.label))
         cur_y += 1
+
     elif state == "processing":
         proc_attr = _ramp(theme.proc_ramp(), _pulse(tick, 72))
-        if download_pct >= 0.0:
+        if rs.download_pct >= 0.0:
             bar_w   = min(40, iw - 8)
-            bar_str = _download_bar(download_pct, bar_w)
-            label   = f"downloading {rs.download_label}  {int(download_pct * 100):3d}%".strip()
+            bar_str = _download_bar(rs.download_pct, bar_w)
+            label   = f"downloading {rs.download_label}  {int(rs.download_pct * 100):3d}%".strip()
             runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
             cur_y += 1
             bar_x    = box_x + _cx(box_w, bar_str)
-            filled_n = int(download_pct * bar_w)
+            filled_n = int(rs.download_pct * bar_w)
             if filled_n > 0:
                 runs.append((cur_y, bar_x, bar_str[:filled_n], theme.done))
             if filled_n < bar_w:
                 runs.append((cur_y, bar_x + filled_n, bar_str[filled_n:], theme.dim))
             cur_y += 1
-            sub = "this only happens once"
-            runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.dim))
+            note = "this only happens once"
+            runs.append((cur_y, box_x + _cx(box_w, note), note, theme.dim))
             cur_y += 1
         else:
-            base = "loading model" if (model_was_cold and not model_loaded) else "transcribing"
-            if audio_secs > 0:
-                unit    = "second" if 0.95 <= audio_secs < 1.05 else "seconds"
-                audio_s = f"  {g['BULLET']}  {audio_secs:.1f} {unit} long"
+            base = "loading model" if (rs.model_was_cold and not rs.model_loaded) else "transcribing"
+            if rs.audio_secs > 0:
+                unit  = "second" if 0.95 <= rs.audio_secs < 1.05 else "seconds"
+                label = f"{base}  {g['BULLET']}  {rs.audio_secs:.1f} {unit} long"
             else:
-                audio_s = ""
-            label = base + audio_s
+                label = base
             runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
             cur_y += 1
-            if proc_tick > 180:
-                elapsed = proc_tick / 60.0
-                hint    = f"still working  {g['BULLET']}  {elapsed:.0f}s elapsed"
+            if rs.proc_tick > 180:
+                hint = f"still working  {g['BULLET']}  {rs.proc_tick / 60.0:.0f}s elapsed"
                 runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.dim))
                 cur_y += 1
 
     stat_y = min(cur_y, text_max_y + 1)
-    if state == "done" and not err and word_count > 0 and not show_dev:
-        stat      = f"{word_count} words  {g['BULLET']}  {audio_secs:.1f}s"
-        stat_attr = theme.dim if done_tick > 40 else theme.soft
+    if state == "done" and not rs.err and rs.word_count > 0 and not show_dev:
+        stat      = f"{rs.word_count} words  {g['BULLET']}  {rs.audio_secs:.1f}s"
+        stat_attr = theme.dim if rs.done_tick > 40 else theme.soft
         runs.append((stat_y, box_x + _cx(box_w, stat), stat, stat_attr))
 
-    notice = "copied" if clipboard_tick > 0 else rs.notice
+    notice = "copied" if rs.clipboard_tick > 0 else rs.notice
     if notice and stat_y + 1 < foot_y:
-        attr = theme.done if clipboard_tick > 22 else theme.mid
+        attr = theme.done if rs.clipboard_tick > 22 else theme.mid
         runs.append((stat_y + 1, box_x + _cx(box_w, notice), notice, attr))
 
     if show_dev:
