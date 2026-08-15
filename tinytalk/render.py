@@ -33,7 +33,7 @@ _G_ASCII = {
     "H": "-", "V": "|",
     "BAR": "#",
     "STEPS": " .:-=+*#",
-    "LOWER": "#*+=-::.. ",
+    "LOWER": " .:-=+*#",
     "SPIN": "-\\|/",
     "REC": " REC ",
     "DONE": " DONE ",
@@ -241,7 +241,7 @@ def chassis(y, x, w, h, label_left, label_right, theme, rail_attr=None):
     runs.append((y + h - 1, x + w - 1, g["BR"], ra))
 
     ltab       = f" {label_left} " if label_left else ""
-    after_left = x + 1 + len(ltab)
+    after_left = x + 2 + len(ltab)
     if ltab:
         runs.append((y, x + 2, ltab, theme.label))
 
@@ -481,7 +481,13 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
     title = "S E T T I N G S"
     runs.append((cur_y, box_x + _cx(box_w, title), title, theme.text))
     cur_y += 1
-    sub = "↑ ↓  navigate    ← →  cycle model    SPC / ENT  toggle    ESC  close"
+    ud, lr = ("up/dn", "l/r") if USE_ASCII else ("↑ ↓", "← →")
+    subs = [
+        f"{ud}  navigate    {lr}  cycle model    SPC / ENT  toggle    ESC  close",
+        f"{ud}  navigate    {lr}  cycle    SPC  toggle    ESC  close",
+        f"{ud} move   SPC toggle   ESC close",
+    ]
+    sub = next((s for s in subs if len(s) <= box_w - 2), subs[-1])
     runs.append((cur_y, box_x + _cx(box_w, sub), sub, theme.dim))
     cur_y += 2
 
@@ -667,8 +673,11 @@ def compose(rs: RenderState):
         cur_y += 1
 
     if err and state == "done":
-        runs.append((cur_y, tx_x, ("! " + err)[:tx_w], theme.err))
-        cur_y += 1
+        err_lines = wrap(err, tx_w)[:3]
+        for i, line in enumerate(err_lines):
+            runs.append((cur_y + i, tx_x, line, theme.err))
+        cur_y += len(err_lines)
+
     elif transcript and state == "done":
         txt_attr      = theme.text if done_tick > 2 else theme.mid
         all_lines     = wrap(transcript[:type_pos], tx_w)
@@ -769,15 +778,21 @@ def compose(rs: RenderState):
             runs.append((dy + 1 + i, ix + 4, key.ljust(pad), theme.soft))
             runs.append((dy + 1 + i, ix + 4 + pad + 3, str(val)[:iw - 10 - pad], theme.mid))
 
+    arrows = "u/d" if USE_ASCII else "↑↓"
     kmap = {
         "idle":       [("SPC", "record"), ("m/M", "model"), ("S", "settings"), ("H", "dev"), ("Q", "quit")],
-        "done":       [("SPC", "again"), ("A", "append"), ("m/M", "model"), ("C", "copy"), ("↑↓", "scroll"), ("[/]", "hist"), ("S", "settings"), ("ESC", "clear")],
+        "done":       [("SPC", "again"), ("A", "append"), ("C", "copy"), (arrows, "scroll"),
+                       ("[/]", "history"), ("S", "settings"), ("ESC", "clear")],
         "listening":  [("SPC", "stop"), ("ESC", "cancel"), ("Q", "quit")],
         "processing": [("SPC", "cancel"), ("ESC", "cancel")],
     }
-    parts = [f"{k} {v}" for k, v in kmap.get(state, [])]
+    # narrow terminals lose the rightmost hints
     sep   = f"  {g['BULLET']}  "
-    runs.append((foot_y, box_x + _cx(box_w, sep.join(parts)), sep.join(parts), theme.dim))
+    parts = [f"{k} {v}" for k, v in kmap.get(state, [])]
+    while len(parts) > 1 and len(sep.join(parts)) > iw:
+        parts.pop()
+    line = sep.join(parts)
+    runs.append((foot_y, box_x + _cx(box_w, line), line, theme.dim))
 
     runs.extend(chassis_runs)
     return _clip(runs, rs.w, rs.h)
