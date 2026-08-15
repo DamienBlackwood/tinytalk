@@ -26,6 +26,7 @@ _G_UNICODE = {
     "UNCHECK": "○",
     "ARROW_L": "◀",
     "ARROW_R": "▶",
+    "FILL": " ░▒▓█",
     "CAP_T": "▔", "CAP_B": "▁",
     "ST_MISSING": "✗", "ST_CACHED": "↓", "ST_HOT": "●", "ST_BUSY": "↻", "ST_UNKNOWN": "?",
 }
@@ -49,6 +50,7 @@ _G_ASCII = {
     "UNCHECK": "o",
     "ARROW_L": "<",
     "ARROW_R": ">",
+    "FILL": " ..:-#",
     "CAP_T": "-", "CAP_B": "-",
     "ST_MISSING": "x", "ST_CACHED": "v", "ST_HOT": "*", "ST_BUSY": "~", "ST_UNKNOWN": "?",
 }
@@ -209,6 +211,8 @@ class RenderState:
     model_was_cold: bool = False
     model_loaded: bool = False
     download_pct: float = -1.0
+    download_label: str = ""
+    model_missing: bool = False
     scroll_offset: int = 0
     word_count: int = 0
     audio_secs: float = 0.0
@@ -563,24 +567,19 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
     return _clip(runs, w, h)
 
 
-def _download_bar(pct: float, width: int, theme, tick: int):
-    g       = _g()
-    filled  = int(pct * width)
-    bar     = []
-
-    BLOCKS  = " ░▒▓█"
-    FULL    = BLOCKS[-1]
-    EMPTY   = BLOCKS[0]
-
+def _download_bar(pct: float, width: int) -> str:
+    blocks = _g()["FILL"]
+    full, empty = blocks[-1], blocks[0]
+    filled = int(pct * width)
+    bar    = []
     for i in range(width):
         if i < filled - 1:
-            bar.append(FULL if not USE_ASCII else "#")
+            bar.append(full)
         elif i == filled - 1:
-            sub = int((pct * width - filled) * (len(BLOCKS) - 1))
-            bar.append(BLOCKS[max(0, min(sub + 2, len(BLOCKS) - 1))] if not USE_ASCII else "#")
+            sub = int((pct * width - filled) * (len(blocks) - 1))
+            bar.append(blocks[max(0, min(sub + 2, len(blocks) - 1))])
         else:
-            bar.append(EMPTY if not USE_ASCII else ".")
-
+            bar.append(empty)
     return "".join(bar)
 
 
@@ -711,17 +710,14 @@ def compose(rs: RenderState):
         cur_y += min(total_lines, visible_h)
 
     elif state == "idle":
-        if "✗" in model:
-            hint  = "press SPACE to speak  -  model downloads automatically"
-            hint2 = "make sure you've run:  hf auth login"
-            runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
-            cur_y += 1
+        hint = "press SPACE to speak"
+        runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
+        cur_y += 1
+        if rs.model_missing:
+            hint2 = f"{rs.download_label} downloads by itself the first time".strip()
             runs.append((cur_y, box_x + _cx(box_w, hint2), hint2, theme.dim))
             cur_y += 1
-        else:
-            hint = "press SPACE to speak"
-            runs.append((cur_y, box_x + _cx(box_w, hint), hint, theme.label))
-            cur_y += 1
+
     elif state == "listening":
         mins, secs = divmod(int(listen_secs), 60)
         timer = f"{mins}:{secs:02d}"
@@ -731,10 +727,9 @@ def compose(rs: RenderState):
     elif state == "processing":
         proc_attr = _ramp(theme.proc_ramp(), _pulse(tick, 72))
         if download_pct >= 0.0:
-            bar_w    = min(40, iw - 8)
-            bar_str  = _download_bar(download_pct, bar_w, theme, tick)
-            pct_str  = f"{int(download_pct * 100):3d}%"
-            label    = f"downloading  {pct_str}"
+            bar_w   = min(40, iw - 8)
+            bar_str = _download_bar(download_pct, bar_w)
+            label   = f"downloading {rs.download_label}  {int(download_pct * 100):3d}%".strip()
             runs.append((cur_y, box_x + _cx(box_w, label), label, proc_attr))
             cur_y += 1
             bar_x    = box_x + _cx(box_w, bar_str)

@@ -8,7 +8,7 @@ from . import paths, render
 from .audio import AudioCapture, MicError, SAMPLE_RATE, check_clip, load_file
 from .backend import (
     transcribe, is_model_cached, check_token, download_model,
-    MODELS, default_model_idx, BACKEND_NAME,
+    MODELS, default_model_idx, BACKEND_NAME, size_label,
 )
 from . import transcripts as transcript_log
 from . import crypto as crypto_mod
@@ -662,6 +662,9 @@ class App:
                 model_was_cold=job.model_was_cold if job else False,
                 model_loaded=job.model_loaded if job else False,
                 download_pct=job.download_pct if job else -1.0,
+                download_label=f"{MODELS[self._active_model_idx].label} "
+                               f"({size_label(MODELS[self._active_model_idx].mb)})",
+                model_missing=status == render.MISSING,
                 scroll_offset=self._scroll_offset,
                 word_count=self._last_word_count,
                 audio_secs=live_audio_secs,
