@@ -25,7 +25,9 @@ class Setting:
 
 VERSION  = "v" + ".".join(__version__.split(".")[:2])
 FRAME_DT = 1 / 60
-TYPE_DT  = 0.016
+TYPE_DT  = 0.016     # per character, until it takes take all day
+TYPE_MIN = 0.35      # a two word transcript still gets a moment
+TYPE_MAX = 1.6       # and a thousand word one doesn't take a trillion years
 
 _model_status: dict[str, str] = {}
 _model_status_lock = threading.Lock()
@@ -528,8 +530,12 @@ class App:
             if self._clipboard_tick > 0:
                 self._clipboard_tick -= 1
             if self.typewriter and self.type_pos < len(self.transcript):
-                self.type_pos = min(len(self.transcript),
-                                    int((time.perf_counter() - self.type_start) / TYPE_DT))
+                n    = len(self.transcript)
+                span = min(TYPE_MAX, max(TYPE_MIN, n * TYPE_DT))
+                done = (time.perf_counter() - self.type_start) / span
+                self.type_pos = min(n, int(n * done))
+                # follow the cursor, otherwise a long transcript types itself straight out the bottom of the viewport
+                self._scroll_offset = self._max_scroll(self.transcript[:self.type_pos])
 
         if self.state in ("processing", "draining"):
             self.spin_i += 1

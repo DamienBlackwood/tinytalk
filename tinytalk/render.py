@@ -685,13 +685,9 @@ def compose(rs: RenderState):
             runs.extend(_scrollbar(cur_y, visible_h, total_lines, visible_h, scroll_offset, sb_x, theme))
 
         if type_pos < len(transcript) and visible_lines:
-            all_typed  = wrap(transcript[:type_pos], tx_w)
-            cursor_abs = max(0, len(all_typed) - 1)
-            cursor_vis = cursor_abs - scroll_offset
-            if 0 <= cursor_vis < len(visible_lines):
-                last = visible_lines[cursor_vis]
-                if (tick // 32) % 2 == 0:
-                    runs.append((cur_y + cursor_vis, tx_x + len(last), "|", theme.on))
+            cursor_vis = (total_lines - 1) - scroll_offset
+            if 0 <= cursor_vis < len(visible_lines) and (tick // 32) % 2 == 0:
+                runs.append((cur_y + cursor_vis, tx_x + len(visible_lines[cursor_vis]), "|", theme.on))
 
         cur_y += min(total_lines, visible_h)
 
