@@ -58,6 +58,17 @@ def glyph(name: str) -> str:
     return _g()[name]
 
 
+def _pulse(tick, period):
+    """0 to 1 and back, on a cosine. everything used to blink on `tick % n < m`,
+    which is a square wave, which is why it read as a flicker rather than a
+    breath."""
+    return 0.5 - 0.5 * math.cos(2 * math.pi * (tick % period) / period)
+
+
+def _ramp(shades, t):
+    return shades[min(len(shades) - 1, max(0, int(t * len(shades))))]
+
+
 WAVE_CEIL = 0.12
 
 PAD   = 2
@@ -143,10 +154,20 @@ class Theme:
     soft:      int = 0
     glass:     int = 0
     proc:      int = 0
+    proc_mid:  int = 0
     proc_soft: int = 0
     rec:       int = 0
+    rec_mid:   int = 0
+    rec_soft:  int = 0
+    rec_dim:   int = 0
     done:      int = 0
     err:       int = 0
+
+    def rec_ramp(self):
+        return (self.rec_dim, self.rec_soft, self.rec_mid, self.rec)
+
+    def proc_ramp(self):
+        return (self.proc_soft, self.proc_mid, self.proc)
 
 
 @dataclass
@@ -413,7 +434,7 @@ def _chip_text(state, spin_i):
     if state == "listening":
         return g["REC"]
     if state == "processing":
-        return f" {g['SPIN'][(spin_i // 6) % 4]} "
+        return f" {g['SPIN'][(spin_i // 8) % 4]} "
     if state == "done":
         return g["DONE"]
     return g["IDLE"]
@@ -591,11 +612,11 @@ def compose(rs: RenderState):
 
     chip = _chip_text(state, spin_i)
     if state in ("listening", "draining"):
-        chip_col = theme.rec if (tick % 50) < 35 else theme.mid
+        chip_col = _ramp(theme.rec_ramp(), _pulse(tick, 64))
     elif state == "processing":
         chip_col = theme.proc
     elif state == "done":
-        chip_col = theme.done if done_tick > 20 else (theme.mid if done_tick > 8 else theme.soft)
+        chip_col = _ramp((theme.soft, theme.mid, theme.done), min(1.0, done_tick / 22.0))
     else:
         chip_col = theme.label
 
@@ -663,7 +684,7 @@ def compose(rs: RenderState):
             cursor_vis = cursor_abs - scroll_offset
             if 0 <= cursor_vis < len(visible_lines):
                 last = visible_lines[cursor_vis]
-                if (tick // 20) % 2 == 0:
+                if (tick // 32) % 2 == 0:
                     runs.append((cur_y + cursor_vis, tx_x + len(last), "|", theme.on))
 
         cur_y += min(total_lines, visible_h)
@@ -687,7 +708,7 @@ def compose(rs: RenderState):
         runs.append((cur_y, box_x + _cx(box_w, line), line, theme.label))
         cur_y += 1
     elif state == "processing":
-        proc_attr = theme.proc if (tick % 40) < 28 else theme.proc_soft
+        proc_attr = _ramp(theme.proc_ramp(), _pulse(tick, 72))
         if download_pct >= 0.0:
             bar_w    = min(40, iw - 8)
             bar_str  = _download_bar(download_pct, bar_w, theme, tick)

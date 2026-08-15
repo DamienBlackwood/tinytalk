@@ -82,8 +82,12 @@ def _build_theme():
             (12, 243),  # soft
             (7,  240),  # glass centerline
             (8,  214),  # proc bright
+            (17, 172),  # proc mid
             (13, 130),  # proc soft
-            (9,  211),  # rec
+            (9,  211),  # rec bright
+            (16, 175),  # rec mid
+            (15, 132),  # rec soft
+            (14, 95),   # rec dim
             (10, 79),   # done
             (11, 167),  # err
         ]
@@ -94,8 +98,10 @@ def _build_theme():
             (5, curses.COLOR_WHITE),  (6, curses.COLOR_WHITE),
             (12, curses.COLOR_WHITE),
             (7, curses.COLOR_BLACK),
-            (8, curses.COLOR_YELLOW), (13, curses.COLOR_YELLOW),
-            (9, curses.COLOR_RED),
+            (8, curses.COLOR_YELLOW), (17, curses.COLOR_YELLOW),
+            (13, curses.COLOR_YELLOW),
+            (9, curses.COLOR_RED),  (16, curses.COLOR_RED),
+            (15, curses.COLOR_RED), (14, curses.COLOR_RED),
             (10, curses.COLOR_GREEN), (11, curses.COLOR_RED),
         ]
     for idx, fg in spec:
@@ -113,8 +119,12 @@ def _build_theme():
         soft      = curses.color_pair(12),
         glass     = curses.color_pair(7),
         proc      = curses.color_pair(8) | curses.A_BOLD,
+        proc_mid  = curses.color_pair(17),
         proc_soft = curses.color_pair(13),
         rec       = curses.color_pair(9) | curses.A_BOLD,
+        rec_mid   = curses.color_pair(16),
+        rec_soft  = curses.color_pair(15),
+        rec_dim   = curses.color_pair(14),
         done      = curses.color_pair(10) | curses.A_BOLD,
         err       = curses.color_pair(11),
     )
@@ -529,12 +539,12 @@ class App:
         if self.state == "draining":
             if self._hist.max() >= 0.001:
                 n = len(self._hist)
-                t = min(1.0, self._drain_tick / 72.0)
+                t = min(1.0, self._drain_tick / 72.0) ** 1.7
                 envelope = np.linspace(1.0 - t * 1.04, 1.0 - t * 0.45, n, dtype=np.float32)
                 self._hist *= np.clip(envelope, 0.0, 1.0)
             self._drain_tick += 1
-            if self._hist.max() < 0.001:
-                self._hist[:] = 0.0
+            if self._hist.max() < 0.001 or self._drain_tick > 90:
+                self._hist[:] = 0.0; self._peak[:] = 0.0
                 self.state = "processing"
                 self._proc_tick = 0
                 mid = MODELS[self._active_model_idx].repo
