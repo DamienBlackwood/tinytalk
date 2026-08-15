@@ -1,5 +1,6 @@
 import json
 import time
+from typing import Iterator
 
 from . import crypto, paths
 
@@ -40,15 +41,14 @@ def save(text: str, model: str, audio_secs: float, words: int) -> None:
         pass
 
 
-def load_recent(n: int = 5) -> list[str]:
-    """Return the last n transcript texts, the newest ones being first. Skips undecryptable
-    entries silently"""
+def read_entries(newest_first: bool = True) -> Iterator[dict]:
+    """Every readable entry, with `text` already decrypted. Anything we can't
+    make sense of gets skipped rather than blowing up the whole log."""
     try:
         lines = paths.TRANSCRIPTS.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return []
-    texts = []
-    for line in reversed(lines):
+        return
+    for line in (reversed(lines) if newest_first else lines):
         line = line.strip()
         if not line:
             continue
@@ -56,9 +56,19 @@ def load_recent(n: int = 5) -> list[str]:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(entry, dict):
+            continue
         text = _resolve_text(entry.get("text"))
-        if text and text.strip():
-            texts.append(text)
-            if len(texts) >= n:
-                break
-    return texts
+        if text is None or not text.strip():
+            continue
+        yield {**entry, "text": text}
+
+
+def load_recent(n: int = 5) -> list[str]:
+    """The last n transcripts, newest first."""
+    out = []
+    for entry in read_entries():
+        out.append(entry["text"])
+        if len(out) >= n:
+            break
+    return out

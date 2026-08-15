@@ -795,6 +795,10 @@ def main():
 
     paths.adopt_legacy()
 
+    if len(sys.argv) > 1 and sys.argv[1] == "log":
+        from .cli_log import main as log_main
+        raise SystemExit(log_main(sys.argv[2:]))
+
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--input", metavar="FILE", default=None)
     p.add_argument("--mock", action="store_true")
