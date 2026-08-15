@@ -115,6 +115,24 @@ class Layout(unittest.TestCase):
                 self.assertNotIn(label, rail, f"dev panel on the rail at {w}x{h}")
             self.assertIn("SPC", footer, f"keybinds missing at {w}x{h}")
 
+    def test_the_waveform_is_more_than_a_centreline_while_you_talk(self):
+        # at 60x24 with the dev panel open it booked one row and drew nothing but the glass
+        theme = render.Theme()
+        loud  = np.full(180, 0.4, dtype=np.float32)
+        dev   = [("model", "TURBO"), ("audio", "4.2s"), ("decode", "1.1s")]
+        for show_dev in (False, True):
+            for w, h in ((60, 18), (60, 24), (80, 24), (120, 40)):
+                rs = render.RenderState(
+                    w=w, h=h, state="listening", transcript="", type_pos=0, err="",
+                    tick=1, spin_i=0, hist=loud, show_dev=show_dev, dev_rows=dev,
+                    version="v0.4", model="TURBO", wave_ceil=0.1, done_tick=0,
+                    theme=theme,
+                )
+                bar  = render.glyph("BAR")
+                rows = {y for y, _x, t, _a in render.compose(rs) if bar in t}
+                self.assertGreaterEqual(len(rows), 2,
+                                        f"flat waveform at {w}x{h} show_dev={show_dev}")
+
     def test_ascii_bars_get_denser_not_sparser(self):
         for table in (render._G_ASCII, render._G_UNICODE):
             self.assertEqual(table["STEPS"][0], " ")

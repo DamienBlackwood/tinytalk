@@ -37,6 +37,7 @@ The release to make things stop being finnicky
 - While a new run is active, those rows switch to live recording, finishing and transcribing status instead of leaving the previous run's numbers on screen.
 - The decode timing is real. `TranscriptionJob` times the call, and the ratio tells you whether the model you picked is keeping up.
 - On a short terminal the waveform gives up rows to make room. If even that isn't enough the panel stays hidden and `H` says so instead of quietly doing nothing.
+- Opening it no longer flattens the waveform. At 60x24 — which is most people's terminal — the panel took so many rows that the waveform booked one and drew nothing but its own centreline while you talked.
 - The `29 words · 8.4s` summary hides while the panel is open, rather than saying it twice.
 
 **Animations**
@@ -46,6 +47,7 @@ The release to make things stop being finnicky
 - The transcript cursor keeps its hard blink, because that's what a cursor is, but at a slower cadence.
 - The drain is eased, so the bars hang for a beat before dropping away, and it can't run longer than 90 frames.
 - The waveform grows peak-hold caps. The `_peak` buffer had been computed every frame since v0.1 and never once drawn.
+- The waveform is as tall as the window can spare while you're talking and collapses to a single line once the text arrives, instead of holding a fixed block of rows either way. The transcript gets those rows back — 80x26 with the dev panel open went from two visible lines to four.
 - The spinner is a little slower.
 
 **Drawing**

@@ -94,24 +94,13 @@ DEV_ROWS   = 3              # always this tall, so the panel never jumps about
 DEV_HEIGHT = DEV_ROWS + 2   # rule line, rows, and a gap above the keybinds
 
 
-def wave_rows(h, show_dev=False):
-    """The waveform gives its rows back on a short terminal, and gives more back
-    when the dev panel wants some. It used to be a flat 7, which left a 60x18
-    window with a header, a footer and nowhere at all to put the transcript."""
-    if show_dev:
-        h -= DEV_HEIGHT
-    if h >= 28:
-        return 7
-    if h >= 24:
-        return 5
-    if h >= 21:
-        return 3
-    return 1
+REST_ROWS = 1   # at rest the waveform is one flat line, so one row is all it books
+WAVE_MAX  = 7   # while you're talking it takes whatever the box can spare, up to this
 
 
-def _header_rows(h, show_dev=False):
+def _header_rows():
     # rail, gap, wordmark, subtitle, gap, chip row, gap, waveform, gap, gap, tag
-    return 7 + wave_rows(h, show_dev) + 3
+    return 7 + REST_ROWS + 3
 
 
 @dataclass
@@ -201,7 +190,7 @@ def _clip(runs, w, h):
 
 def _text_rows(w, h, show_dev):
     box_x, box_y, box_w, box_h, ix, iw = _box(w, h)
-    top    = box_y + _header_rows(h, show_dev)
+    top    = box_y + _header_rows()
     bottom = (box_y + box_h - 2) - 3 - (DEV_HEIGHT if show_dev else 0)
     return top, bottom
 
@@ -601,10 +590,21 @@ def compose(rs: RenderState):
     runs.append((cur_y, ix + iw - len("SR 16K"),  "SR 16K",               theme.label))
     cur_y += 2
 
+    foot_y     = box_y + box_h - 2
+    text_max_y = foot_y - 3 - (DEV_HEIGHT if show_dev else 0)
+    body_floor = foot_y - 1 - (DEV_HEIGHT if show_dev else 0)
+
     wave_w = min(iw - 2, 140)
     wave_x = box_x + _cx(box_w, " " * wave_w)
     wave_y = cur_y
-    wave_h = wave_rows(rs.h, show_dev)
+    wave_h = REST_ROWS
+
+    if state in ("listening", "draining", "processing"):
+        # there's nothing in the transcript viewport while you're talking, so the
+        # waveform takes it and gives it back when the text turns up
+        room = body_floor - wave_y - 3
+        if room > wave_h:
+            wave_h = min(WAVE_MAX, room - (room + 1) % 2)   # odd, so there's a middle row
 
     if rs.download_pct >= 0.0:
         cur_y += 2
@@ -621,9 +621,6 @@ def compose(rs: RenderState):
     tx_w, _ = text_view(rs.w, rs.h, show_dev)
     tx_x     = box_x + _cx(box_w, " " * (tx_w + 2))
     sb_x     = tx_x + tx_w + 1
-
-    foot_y     = box_y + box_h - 2
-    text_max_y = foot_y - 3 - (DEV_HEIGHT if show_dev else 0)
 
     if state == "done" and (rs.transcript or rs.err):
         tag      = "ERROR" if rs.err else "TRANSCRIPT"
