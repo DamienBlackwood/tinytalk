@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Any
 from . import __version__
 from . import paths, render
-from .audio import AudioCapture, MicError, SAMPLE_RATE, check_clip
+from .audio import AudioCapture, MicError, SAMPLE_RATE, check_clip, load_file
 from .backend import (
     transcribe, is_model_cached, check_token, download_model,
     MODELS, DEFAULT_MODEL_IDX, BACKEND_NAME,
@@ -648,44 +648,15 @@ class App:
         self.scr.noutrefresh(); curses.doupdate()
 
     def inject_audio(self, path: str):
-        import wave, subprocess as sp
-        ext = Path(path).suffix.lower()
-        ffmpeg_exts = {".m4a", ".mp3", ".aac", ".ogg", ".flac", ".mp4", ".webm"}
-
-        if ext in ffmpeg_exts:
-            try:
-                proc = sp.run(
-                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
-                     "-i", path, "-f", "f32le", "-ac", "1",
-                     "-ar", str(SAMPLE_RATE), "-"],
-                    stdout=sp.PIPE, stderr=sp.PIPE, check=True,
-                )
-            except FileNotFoundError:
-                raise RuntimeError("ffmpeg not found, install it to load M4A/MP3 files")
-            audio = np.frombuffer(proc.stdout, dtype=np.float32)
-        else:
-            try:
-                import soundfile as sf
-                audio, sr = sf.read(path, dtype="float32", always_2d=False)
-                if audio.ndim > 1:
-                    audio = audio.mean(axis=1)
-                if sr != SAMPLE_RATE:
-                    import math
-                    from scipy.signal import resample_poly
-                    g = math.gcd(SAMPLE_RATE, sr)
-                    audio = resample_poly(audio, SAMPLE_RATE // g, sr // g).astype(np.float32)
-            except ImportError:
-                with wave.open(path, "rb") as wf:
-                    sr = wf.getframerate()
-                    raw = wf.readframes(wf.getnframes())
-                    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                    if wf.getnchannels() == 2:
-                        audio = audio.reshape(-1, 2).mean(axis=1)
-                    if sr != SAMPLE_RATE:
-                        new_len = int(len(audio) * SAMPLE_RATE / sr)
-                        audio = np.interp(np.linspace(0, len(audio) - 1, new_len),
-                                          np.arange(len(audio)), audio).astype(np.float32)
-
+        try:
+            audio = load_file(path)
+        except (OSError, RuntimeError) as e:
+            self._finish_early(str(e))
+            return
+        problem = check_clip(audio)
+        if problem:
+            self._finish_early(problem)
+            return
         self._captured = audio
         self.state = "processing"
         self._proc_tick = 0

@@ -1,5 +1,11 @@
-import threading
 import collections
+import math
+import shutil
+import subprocess
+import threading
+import wave
+from pathlib import Path
+
 import numpy as np
 import sounddevice as sd
 
@@ -109,3 +115,75 @@ def check_clip(audio) -> str | None:
     if peak < SILENCE_PEAK:
         return "only silence  -  nothing to transcribe"
     return None
+
+
+def _resample(audio: np.ndarray, src_rate: int) -> np.ndarray:
+    if src_rate == SAMPLE_RATE:
+        return audio.astype(np.float32, copy=False)
+    try:
+        from scipy.signal import resample_poly
+        g = math.gcd(SAMPLE_RATE, src_rate)
+        return resample_poly(audio, SAMPLE_RATE // g, src_rate // g).astype(np.float32)
+    except ImportError:
+        new_len = int(len(audio) * SAMPLE_RATE / src_rate)
+        return np.interp(
+            np.linspace(0, len(audio) - 1, new_len),
+            np.arange(len(audio)), audio,
+        ).astype(np.float32)
+
+
+def _via_ffmpeg(path: Path) -> np.ndarray:
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+         "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError(f"ffmpeg couldn't read {path.name}"
+                           + (f"  -  {detail[-1][:70]}" if detail else ""))
+    return np.frombuffer(proc.stdout, dtype=np.float32)
+
+
+def _via_soundfile(path: Path) -> np.ndarray:
+    import soundfile as sf
+    audio, rate = sf.read(str(path), dtype="float32", always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    return _resample(audio, rate)
+
+
+def _via_wave(path: Path) -> np.ndarray:
+    with wave.open(str(path), "rb") as wf:
+        if wf.getsampwidth() != 2:
+            raise RuntimeError("only 16-bit WAV without ffmpeg, sorry")
+        rate    = wf.getframerate()
+        raw     = wf.readframes(wf.getnframes())
+        audio   = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        if wf.getnchannels() == 2:
+            audio = audio[: len(audio) // 2 * 2].reshape(-1, 2).mean(axis=1)
+    return _resample(audio, rate)
+
+
+def load_file(path: str) -> np.ndarray:
+    """Read any audio file down to mono float32 at 16k. ffmpeg first because it
+    reads everything, then soundfile, then the stdlib for plain WAVs."""
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise FileNotFoundError(f"no such file: {p}")
+
+    if shutil.which("ffmpeg"):
+        audio = _via_ffmpeg(p)
+    else:
+        try:
+            audio = _via_soundfile(p)
+        except ImportError:
+            if p.suffix.lower() not in (".wav", ".wave"):
+                raise RuntimeError(
+                    f"install ffmpeg to read {p.suffix.lstrip('.').upper() or 'these'} files"
+                ) from None
+            audio = _via_wave(p)
+
+    if len(audio) == 0:
+        raise RuntimeError(f"{p.name} has no audio in it")
+    return audio.astype(np.float32, copy=False)
