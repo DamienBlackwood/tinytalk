@@ -548,7 +548,7 @@ def compose_settings(w, h, items, selected_row, theme, models=None, model_status
 
 def _download_bar(pct: float, width: int) -> str:
     blocks = _g()["FILL"]
-    full, empty = blocks[-1], blocks[0]
+    full, empty = blocks[-1], blocks[1]   # blocks[0] is a space, which is no track at all
     filled = int(pct * width)
     bar    = []
     for i in range(width):

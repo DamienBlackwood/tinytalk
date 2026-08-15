@@ -55,6 +55,7 @@ The release to make things stop being finnicky
 - The ASCII bar ramp ran backwards, so the quietest bars drew the densest character.
 - `┌─ TINYTALK─────` lost its trailing space to the rail fill.
 - The footer drops hints from the right instead of overrunning.
+- The download bar has a track. The unfilled half was drawn with the space at the front of the block ramp, so a 40% download looked like a bar floating in nothing.
 - The typewriter follows its own cursor, so a long transcript no longer types itself out of the viewport.
 - Frames are only pushed to the terminal when they change. An idle tinytalk costs nothing.
 - `m`/`M` and the settings screen now change the same model. They used to keep separate ideas of which one was selected.
