@@ -25,6 +25,7 @@ class Setting:
 
 VERSION  = "v" + ".".join(__version__.split(".")[:2])
 FRAME_DT = 1 / 60
+IDLE_DT  = 1 / 30
 TYPE_DT  = 0.016     # per character, until it takes take all day
 TYPE_MIN = 0.35      # a two word transcript still gets a moment
 TYPE_MAX = 1.6       # and a thousand word one doesn't take a trillion years
@@ -289,10 +290,16 @@ class App:
         self._settings = self._build_settings()
 
         self.theme = None
+        self._last_frame = None
+        self._dirty = True
 
     @property
     def model(self):
         return MODELS[self.model_idx]
+
+    def _clear(self):
+        self.scr.clear()
+        self._dirty = True
 
     def _start_job(self, audio, model):
         self._job = TranscriptionJob(audio, model, mock=self._mock)
@@ -309,24 +316,24 @@ class App:
             if self.state == "processing":
                 if self._job:
                     self._job.cancel()
-                self.state = "idle"; self.scr.clear()
+                self.state = "idle"; self._clear()
                 return True
             if self.state == "done":
                 self.transcript = ""; self.err = ""; self.type_pos = 0
                 self._hist_idx = -1; self._scroll_offset = 0
                 self._append_prefix = ""
-                self.state = "idle"; self.scr.clear()
+                self.state = "idle"; self._clear()
             elif self.state == "listening":
                 self.audio.disarm(); self.state = "idle"
-                self._hist[:] = 0.0; self._peak[:] = 0.0; self.scr.clear()
+                self._hist[:] = 0.0; self._peak[:] = 0.0; self._clear()
             return True
         if key == curses.KEY_RESIZE:
             self._scroll_offset = 0
-            self.scr.clear()
+            self._clear()
         elif key in (ord('s'), ord('S')):
             self._in_settings = True
             self._settings_row = 0
-            self.scr.clear()
+            self._clear()
         elif key in (ord('h'), ord('H')):
             self.show_dev = not self.show_dev
             _save_state(self)
@@ -334,7 +341,7 @@ class App:
                 h, w = self.scr.getmaxyx()
                 if not render.dev_fits(w, h):
                     self._flash("dev panel needs a taller window")
-            self.scr.clear()
+            self._clear()
         elif key in (ord('m'), ord('M')):
             if self.state not in ("listening", "processing", "draining"):
                 self._cycle_model(-1 if key == ord('M') else 1)
@@ -371,7 +378,7 @@ class App:
             if self.state == "processing":
                 if self._job:
                     self._job.cancel()
-                self.state = "idle"; self.scr.clear()
+                self.state = "idle"; self._clear()
                 return True
             self._toggle()
         return True
@@ -385,7 +392,7 @@ class App:
     def _handle_settings_key(self, key):
         if key in (27, ord('s'), ord('S'), ord('q'), ord('Q')):
             self._in_settings = False
-            self.scr.clear()
+            self._clear()
         elif key == curses.KEY_UP:
             self._settings_row = max(0, self._settings_row - 1)
         elif key == curses.KEY_DOWN:
@@ -418,7 +425,7 @@ class App:
 
         def toggle_dev(_):
             self.show_dev = not self.show_dev
-            self.scr.clear()
+            self._clear()
             _save_state(self)
 
         return [
@@ -449,7 +456,7 @@ class App:
         self._done_tick = 0
         self._scroll_offset = 0
         self._append_prefix = ""
-        self.scr.clear()
+        self._clear()
 
     def _toggle(self):
         if self.state in ("idle", "done"):
@@ -686,6 +693,13 @@ class App:
             )
             runs = render.compose(rs)
 
+        # before I kept redrawing frames for an IDLE tinytalk... oh god
+        frame = (w, h, runs)
+        if not self._dirty and frame == self._last_frame:
+            return
+        self._dirty = False
+        self._last_frame = frame
+
         self.scr.erase()
         for y, x, text, attr in runs:
             try:
@@ -738,16 +752,13 @@ class App:
                         break
                     if not self.handle_key(key):
                         return
-                self.step(); self.draw()
-                static = (self.state == "done"
-                          and not (self.typewriter and self.type_pos < len(self.transcript))
-                          and self._clipboard_tick == 0)
-                if static and not self._in_settings:
-                    time.sleep(1 / 10)
-                elif self.state in ("idle", "done") and not self._in_settings:
-                    time.sleep(1 / 20)
-                else:
-                    time.sleep(FRAME_DT)
+                self.step()
+                self.draw()
+                busy = (self.state in ("listening", "draining", "processing")
+                        or self._clipboard_tick > 0
+                        or self._notice_tick > 0
+                        or (self.typewriter and self.type_pos < len(self.transcript)))
+                time.sleep(FRAME_DT if busy else IDLE_DT)
         finally:
             self.audio.stop()
 
