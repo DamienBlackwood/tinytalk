@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Any
 from . import __version__
 from . import paths, render
-from .audio import AudioCapture, MicError, SAMPLE_RATE
+from .audio import AudioCapture, MicError, SAMPLE_RATE, check_clip
 from .backend import (
     transcribe, is_model_cached, check_token, download_model,
     MODELS, DEFAULT_MODEL_IDX, BACKEND_NAME,
@@ -453,8 +453,9 @@ class App:
             self._listen_start = time.perf_counter()
         elif self.state == "listening":
             captured = self.audio.disarm()
-            if captured is None:
-                self.state = "idle"
+            problem  = check_clip(captured)
+            if problem:
+                self._finish_early(problem)
                 return
             self._captured   = captured
             self._drain_tick = 0

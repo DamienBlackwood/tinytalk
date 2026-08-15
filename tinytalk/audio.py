@@ -7,6 +7,9 @@ SAMPLE_RATE  = 16000
 CHUNK        = 512
 RING_CHUNKS  = 80     # ~2.5s at 16kHz/512
 
+MIN_SECS     = 0.35   # shorter than this and whisper just invents something
+SILENCE_PEAK = 0.005  # quieter than this and it invents something anyway
+
 
 class MicError(RuntimeError):
     pass
@@ -92,3 +95,17 @@ class AudioCapture:
         if len(data) == 0:
             return 0.0
         return float(np.sqrt(np.mean(data * data)))
+
+
+def check_clip(audio) -> str | None:
+    """The clips that used to make Whisper invent words. None means go ahead."""
+    if audio is None or len(audio) == 0:
+        return "nothing recorded"
+    if len(audio) < SAMPLE_RATE * MIN_SECS:
+        return "too short  -  hold space a little longer"
+    peak = float(np.abs(audio).max())
+    if peak == 0.0:
+        return "no audio came through  -  check that your terminal can use the mic"
+    if peak < SILENCE_PEAK:
+        return "only silence  -  nothing to transcribe"
+    return None
