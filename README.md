@@ -63,8 +63,6 @@ Set `TINYTALK_HOME` if you'd rather keep all of that somewhere else.
 python -m unittest discover tests
 ```
 
-## Methodology
-
 All code written and thought out by me, with only **minor** assistance from AI. But mostly drawn from existing research/examples and implemented independently.
 
 ## License
