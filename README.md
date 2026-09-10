@@ -47,13 +47,13 @@ In my case, I use Ghostty, so that meant the `xterm-ghostty` terminfo entry mark
 
 The one that took longest to find was quieter than either. Every drawing call sat inside a bare `try/except`, so anything that overran the edge of the terminal simply vanished instead of complaining. A 60-column window had been drawing its right-hand rail one column off the screen for months. Everything now goes through a single clip pass, and there's a test that walks every state at every size looking for exactly that.
 
-I'll be using the commits and messages in them as notes *for me*, to keep myself accountable.
+I'll be using the commits and messages in them as notes *for me*, to keep myself accountable. 😎
 
 ## Your transcripts
 
 Every transcription is appended to `~/.tinytalk/transcripts.jsonl`, with the text encrypted (AES-256-GCM) and the metadata left readable. `tinytalk log` reads them back.
 
-The key lives beside the log, so this stops someone idly scrolling through the file — it will not stop anyone who has your home folder. I'd rather say that plainly than imply more than it does. PIN-derived keys are the next thing on my list.
+The key lives beside the log, so this stops someone idly scrolling through the file, but... it will not stop anyone who has your home folder and I'd rather say that quite clearly. BUT, PIN-derived keys are the next thing on my list!!
 
 Set `TINYTALK_HOME` if you'd rather keep all of that somewhere else.
 
@@ -63,7 +63,7 @@ Set `TINYTALK_HOME` if you'd rather keep all of that somewhere else.
 python -m unittest discover tests
 ```
 
-All code written and thought out by me, with only **minor** assistance from AI. But mostly drawn from existing research/examples and implemented independently.
+All code written and thought out by me, with only **minor** assistance from AI (in formatting or cleanliness). But mostly drawn from existing research/examples and implemented independently.
 
 ## License
 
